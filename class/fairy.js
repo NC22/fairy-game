@@ -1,7 +1,4 @@
 
-// ============================================================
-//  FAIRY CLASS
-// ============================================================
 function Fairy(env) {
 
   var h = this;
@@ -92,7 +89,6 @@ function Fairy(env) {
       return true;
     }
 
-    // === Companion mode: figure-8 orbit around player ===
     var px = env.player.x, py = env.player.y;
 
     // Figure-8 (Lissajous) relative to home angle around player

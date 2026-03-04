@@ -1,6 +1,4 @@
-// ============================================================
-//  MONSTER CLASS
-// ============================================================
+
 function Monster(env) {
 
     var h = this;
@@ -92,7 +90,7 @@ function Monster(env) {
     // Возвращает:
     //   'shoot'     — прицеливание завершено И есть попадание  стрелять
     //   'interrupt' — моб получил удар во время прицеливания  сбросить
-    //   'no_hit'    — нет линии попадания → сбросить прицел
+    //   'no_hit'    — нет линии попадания сбросить прицел
     //   false       — продолжаем прицеливаться
     var AIM_DURATION      = 1.2;  // секунд прицеливания перед выстрелом
     var AIM_LERP          = 4.0;  // скорость поворота прицела (рад/с)
@@ -127,8 +125,6 @@ function Monster(env) {
         var simCheck = new Projectile(env);
         var canHit = simCheck.simulateHitsPlayer(h.x, h.y, h._aiAimAngle, h._aiAimBounces);
         if (!canHit) {
-            // Если уже прицеливались — прерываем (игрок ушёл за угол)
-            // Если ещё не начали — просто не стартуем прицел 
             if (h._aiAiming) return 'no_hit';
             return false;
         }
@@ -191,7 +187,6 @@ function Monster(env) {
                 return;
             }
         }
-        // Запасной вариант — стреляем в сторону игрока с разбросом
         var baseAngle = Math.atan2(env.player.y - fy, env.player.x - fx) + rand(-0.4, 0.4);
         var sim2 = new Projectile(env);
         sim2.make(fx, fy, Math.cos(baseAngle) * speed, Math.sin(baseAngle) * speed, h.atk, h._aiAimBounces);
@@ -376,7 +371,7 @@ function Monster(env) {
         var goMelee = playerStuck || (pd <= 2);  // < 2 тайлов — переходим в ближний бой
 
         if (goMelee) {
-            // ── Ближний бой ──────────────────────────────────────
+            //  Ближний бой 
             h._aiAiming = false;
             // Сначала пробуем ударить
             if (h.tryMeleeAttack(env.player)) {
@@ -389,15 +384,13 @@ function Monster(env) {
                 _moveTowardPlayer(0); // stopDist=0 — подходим вплотную
             }
         } else {
-            // ── Дистанционный режим ──────────────────────────────
+            //  Дистанционный режим
             if (!h._aiAiming && h.stateTimer <= 0) {
                 
                 h.stateTimer = 0.5 / h.speed;
                 var d = _moveRandom();
                 validateMove(d);
                 updateFacing(d);
-                
-                // в зоне комфорта — стоим
             }
 
             // Прицеливание и выстрел
@@ -407,12 +400,10 @@ function Monster(env) {
                     _spiderTryShoot();
                     h.resetAim(2.0, 4.5);
                 } else if (res2 === 'interrupt') {
-                    // получили удар — злимся, форсируем путь в ближний бой
                     h.resetAim(0.5, 1.0);
                     h.path = env.pathfinder.find(h.c, h.r, env.player.c, env.player.r);
                     h.pathTimer = 1.0;
                 } else if (res2 === 'no_hit') {
-                    // нет прямой видимости — сбрасываем прицел и идём к игроку
                     h.resetAim(0.6, 1.2);
                     if (h.stateTimer <= 0) {
                         h.stateTimer = 0.5 / h.speed;
@@ -439,9 +430,6 @@ function Monster(env) {
         }
 
     }
-    // ============================================================
-    //  UPDATE
-    // ============================================================
     h.update = function(dt) {
         if (h.dead || !env.player) return;
 

@@ -3,89 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <title>Sprite Animator</title>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-:root {
-  --bg:      #0e0e16;
-  --panel:   #151520;
-  --border:  #2a2a3e;
-  --accent:  #c8a84b;
-  --accent2: #5a8fc8;
-  --danger:  #c85a5a;
-  --ok:      #5ac87a;
-  --text:    #ddd;
-  --muted:   #666;
-  --tile0:   #111118;
-  --tile1:   #14141e;
-}
-body { background:var(--bg); color:var(--text); font-family:'Courier New',monospace; font-size:12px; height:100vh; overflow:hidden; display:flex; flex-direction:column; }
-
-/* TOP BAR */
-#topbar { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--border); flex-shrink:0; flex-wrap:wrap; }
-#topbar h1 { font-size:13px; color:var(--accent); letter-spacing:2px; margin-right:4px; }
-.sep { width:1px; height:18px; background:var(--border); margin:0 4px; }
-button { padding:3px 9px; font-family:'Courier New',monospace; font-size:11px; cursor:pointer; border:1px solid var(--border); border-radius:2px; background:var(--panel); color:var(--text); transition:border-color .15s, background .15s; }
-button:hover { border-color:var(--accent); background:#1e1e2e; }
-button.active { border-color:var(--accent); color:var(--accent); }
-button.ok  { border-color:var(--ok);  color:var(--ok);  }
-button.bad { border-color:var(--danger); color:var(--danger); }
-input[type=number], input[type=text], select {
-  padding:2px 5px; font-family:'Courier New',monospace; font-size:11px;
-  background:#0a0a12; border:1px solid var(--border); color:var(--text); border-radius:2px;
-}
-input[type=number] { width:52px; }
-label { font-size:11px; color:var(--muted); }
-
-/* MAIN LAYOUT */
-#main { display:flex; flex:1; overflow:hidden; }
-
-/* LEFT PANEL — parts list */
-#left { width:180px; flex-shrink:0; background:var(--panel); border-right:1px solid var(--border); display:flex; flex-direction:column; }
-#left h2, #right h2, #bottom-head { font-size:10px; color:var(--muted); letter-spacing:1px; padding:5px 8px; border-bottom:1px solid var(--border); text-transform:uppercase; }
-#parts-list { flex:1; overflow-y:auto; }
-.part-item { display:flex; align-items:center; gap:5px; padding:4px 8px; cursor:pointer; border-bottom:1px solid #11111a; transition:background .1s; }
-.part-item:hover { background:#1a1a28; }
-.part-item.selected { background:#1e1e30; border-left:2px solid var(--accent); }
-.part-item .pname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.part-item .pz { color:var(--muted); font-size:10px; }
-.part-item .phide { color:var(--muted); font-size:10px; cursor:pointer; }
-.part-item .phide:hover { color:var(--accent); }
-/* indent for children */
-.part-item .pindent { display:inline-block; color:var(--accent2); font-size:10px; flex-shrink:0; }
-#left-btns { display:flex; gap:4px; padding:6px; border-top:1px solid var(--border); }
-#left-btns button { flex:1; font-size:10px; padding:3px 4px; }
-
-/* CENTER — canvas */
-#center { flex:1; display:flex; flex-direction:column; overflow:hidden; }
-#canvas-wrap { flex:1; position:relative; overflow:hidden; cursor:crosshair; }
-canvas#preview { display:block; width:100%; height:100%; }
-#center-toolbar { display:flex; gap:6px; padding:4px 8px; background:var(--panel); border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap; }
-
-/* RIGHT PANEL — part properties at current frame */
-#right { width:210px; flex-shrink:0; background:var(--panel); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow-y:auto; }
-#right h2 { position:sticky; top:0; background:var(--panel); z-index:2; }
-.prop-row { display:flex; align-items:center; gap:4px; padding:3px 8px; border-bottom:1px solid #11111a; }
-.prop-row label { width:64px; flex-shrink:0; font-size:10px; }
-.prop-row input[type=number] { flex:1; width:auto; }
-.prop-row input[type=checkbox] { cursor:pointer; }
-.prop-row select { flex:1; width:auto; font-size:10px; }
-.prop-section { padding:5px 8px 2px; font-size:10px; color:var(--accent); letter-spacing:1px; border-bottom:1px solid var(--border); }
-
-/* BOTTOM — timeline */
-#bottom { height:140px; flex-shrink:0; background:var(--panel); border-top:1px solid var(--border); display:flex; flex-direction:column; }
-#timeline-head { display:flex; align-items:center; gap:6px; padding:4px 8px; border-bottom:1px solid var(--border); }
-#timeline-scroll { flex:1; overflow:auto; position:relative; }
-canvas#timeline { display:block; }
-
-#file-input { display:none; }
-#anim-select { width:110px; }
-#playhead-line { position:absolute; top:0; bottom:0; width:1px; background:var(--accent); pointer-events:none; }
-</style>
+<link href="style.css?v=081125" rel="stylesheet">
 </head>
 <body>
 
 <div id="topbar">
-  <h1>⚡ SPRITE ANIM</h1>
+  <h1>SPRITE ANIM</h1>
   <div class="sep"></div>
   <label>Анимация:</label>
   <select id="anim-select" onchange="App.selectAnim(this.value)"></select>
@@ -169,7 +92,7 @@ canvas#timeline { display:block; }
   </div>
 </div>
 
-<script src="lerp.js"></script>
+<script src="../lerp.js"></script>
 <script>
 
 // =============================================================================
@@ -1402,7 +1325,6 @@ var App = (function()
     }
 
     init();
-
     return {
         selectAnim     : selectAnim,
         newAnim        : newAnim,
@@ -1427,111 +1349,8 @@ var App = (function()
         onImportJSON   : onImportJSON,
         render         : render
     };
-
 })();
 </script>
 
-<!-- =====================================================================
-     RUNTIME PLAYER
-     SpritePlayer(project, startAnim, images) — images: {partId: HTMLImageElement}
-====================================================================== -->
-<script id="runtime-player">
-function SpritePlayer(project, startAnim, images)
-{
-    var p = {};
-    var currentAnim = startAnim;
-    var frame = 0.0;
-    var playing = true;
-
-    function anim() { return project.anims[currentAnim]; }
-
-    function lerp(a,b,t) { return a+(b-a)*t; }
-    function lerpAngle(a,b,t) {
-        var d=b-a; while(d>180)d-=360; while(d<-180)d+=360; return a+d*t;
-    }
-
-    function keyframes(part) {
-        return Object.keys(part.keys||{}).map(Number).sort(function(a,b){return a-b;});
-    }
-
-    function localStateAt(part, f) {
-        var kf = part.keys || {};
-        var frames = keyframes(part);
-        if (!frames.length) return {x:0,y:0,rot:0,sx:1,sy:1,hidden:false,z:0};
-        // exact keyframe must win (important for step-like props such as hidden/z)
-        if (kf[f]) return Object.assign({}, kf[f]);
-        if (frames.length===1||f<=frames[0]) return Object.assign({},kf[frames[0]]);
-        if (f>=frames[frames.length-1]) return Object.assign({},kf[frames[frames.length-1]]);
-        var lo,hi;
-        for (var i=0;i<frames.length-1;i++) {
-            if(frames[i]<=f&&frames[i+1]>=f){lo=frames[i];hi=frames[i+1];break;}
-        }
-        var t=(f-lo)/(hi-lo), a=kf[lo], b=kf[hi];
-        return { x:lerp(a.x,b.x,t), y:lerp(a.y,b.y,t),
-                 rot:lerpAngle(a.rot,b.rot,t), sx:lerp(a.sx,b.sx,t), sy:lerp(a.sy,b.sy,t),
-                 hidden:a.hidden, z:a.z };
-    }
-
-    function getPart(id) {
-        if (!anim()) return null;
-        for (var i=0;i<anim().parts.length;i++) if(anim().parts[i].id===id) return anim().parts[i];
-        return null;
-    }
-
-    function worldStateAt(part, f) {
-        var local = localStateAt(part, f);
-        if (!part.parent) return local;
-        var parentPart = getPart(part.parent);
-        if (!parentPart) return local;
-        var pw = worldStateAt(parentPart, f);
-        if (pw.hidden) { var r=Object.assign({},local); r.hidden=true; return r; }
-        var prad = pw.rot*Math.PI/180;
-        var cos=Math.cos(prad), sin=Math.sin(prad);
-        return {
-            x: pw.x + (local.x*pw.sx)*cos - (local.y*pw.sy)*sin,
-            y: pw.y + (local.x*pw.sx)*sin + (local.y*pw.sy)*cos,
-            rot: pw.rot+local.rot, sx:pw.sx*local.sx, sy:pw.sy*local.sy,
-            hidden:local.hidden, z:local.z
-        };
-    }
-
-    p.setAnim = function(name) { if(currentAnim!==name){currentAnim=name;frame=0;} };
-
-    p.update = function(dt) {
-        if (!anim()||!playing) return;
-        frame += anim().fps * dt;
-        if (frame >= anim().duration) frame = 0;
-    };
-
-    p.draw = function(ctx, cx, cy, scale) {
-        if (!anim()) return;
-        scale = scale || 1;
-        var f = Math.floor(frame);
-        var parts = anim().parts.slice().sort(function(a,b){
-            return worldStateAt(a,f).z - worldStateAt(b,f).z;
-        });
-        for (var i=0;i<parts.length;i++) {
-            var part=parts[i];
-            var s=worldStateAt(part,f);
-            if(s.hidden) continue;
-            var img=images[part.id];
-            if(!img) continue;
-            ctx.save();
-            ctx.translate(cx+s.x*scale, cy+s.y*scale);
-            ctx.rotate(s.rot*Math.PI/180);
-            ctx.scale(s.sx*scale, s.sy*scale);
-            ctx.drawImage(img,-img.width/2,-img.height/2);
-            ctx.restore();
-        }
-    };
-
-    p.getFrame = function() { return Math.floor(frame); };
-    p.setFrame = function(f) { frame=f; };
-    p.pause    = function() { playing=false; };
-    p.resume   = function() { playing=true; };
-
-    return p;
-}
-</script>
 </body>
 </html>

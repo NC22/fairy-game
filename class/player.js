@@ -1,6 +1,4 @@
-// ============================================================
-//  PLAYER CLASS
-// ============================================================
+
 function Player(env) {
 
     var h = this;
@@ -59,7 +57,6 @@ function Player(env) {
         return h;
     };
 
-    // ---- Weapon part lists for force_hide/force_show ----
     var WEAPON_PARTS = {
         sword:  ['sword'],
         bow:    ['bow', 'bow_st', 'arrow'],

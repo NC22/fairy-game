@@ -1,7 +1,3 @@
-
-// ============================================================
-//  PROJECTILE CLASS  (arrow with ricochet + any angle)
-// ============================================================
 function Projectile(env) {
 
   var h = this;
@@ -130,7 +126,7 @@ function Projectile(env) {
 
     h.angle = Math.atan2(h.vy, h.vx);
 
-    // Friendly fire: player can be hit by own arrow
+    // Friendly fire
     if (h.dangerTimeout <= 0) 
     if (env.player && env.player.hp > 0) {
       var pl = env.player;
@@ -198,10 +194,7 @@ function Projectile(env) {
       var tx = h.x - dx * tailLength;
       var ty = h.y - dy * tailLength;
 
-      // =====================================================
-      // ГЛАВНАЯ ПОЛОСА (океанический синий)
-      // =====================================================
-
+      // главная полоса
       var grad = ctx.createLinearGradient(h.x, h.y, tx, ty);
       grad.addColorStop(0, "rgba(80,190,255,1)");
       grad.addColorStop(0.4, "rgba(40,150,220,0.9)");
@@ -216,10 +209,7 @@ function Projectile(env) {
       ctx.lineTo(tx, ty);
       ctx.stroke();
 
-      // =====================================================
-      // ВНУТРЕННИЙ ЯРКИЙ СТЕРЖЕНЬ
-      // =====================================================
-
+      // внутренний яркий стержень
       ctx.lineWidth = 2;
       ctx.strokeStyle = "rgba(120,220,255,0.9)";
       ctx.beginPath();
@@ -227,10 +217,7 @@ function Projectile(env) {
       ctx.lineTo(tx, ty);
       ctx.stroke();
 
-      // =====================================================
-      // ЯДРО
-      // =====================================================
-
+      // ядро
       var pulse = 1 + Math.sin(h.life * 10) * 0.12;
       var r = 5 * pulse;
 
