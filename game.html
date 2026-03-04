@@ -1,0 +1,1324 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Fairy tale</title>
+
+<script src="lerp.js"></script>
+<script src="pathfind.js"></script>
+<script src="tools.js"></script>
+
+<script src="SpritePlayer.js"></script>
+<script src="data/anims/player.js"></script>
+<script src="data/anims/bow.js"></script>
+<script src="data/anims/fairy.js"></script>
+
+<script src="class/dmgpoint.js"></script>
+<script src="class/fairy.js"></script>
+<script src="class/monster.js"></script>
+<script src="class/player.js"></script>
+<script src="class/particle.js"></script>
+<script src="class/dialog.js"></script>
+<script src="class/projectile.js"></script>
+<script src="class/hud.js"></script>
+<script src="class/camera.js"></script>
+<script src="class/npc.js"></script>
+<script src="class/item.js"></script>
+<script src="class/cage.js"></script>
+
+<script src="data/mobs.js"></script>
+<script src="data/sprites.js"></script>
+<script src="data/npc.js"></script>
+<script src="data/items.js"></script>
+<script src="data/cages.js"></script>
+
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0a08; font-family:'Courier New',monospace; overflow:hidden; user-select:none; }
+  #canvas-wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; cursor:default; image-rendering: pixelated; image-rendering: crisp-edges; }
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.07) 2px, rgba(0,0,0,0.07) 4px);
+    pointer-events: none;
+    z-index: 100;
+  }
+</style>
+</head>
+<body>
+<div id="canvas-wrap"><canvas id="c"></canvas></div>
+
+<script>
+
+
+// ============================================================
+//  MAIN GAME  (G)
+// ============================================================
+var G = (function(){
+
+  var env = this;
+
+  // ---- Config ----
+  env.cfg = {mapW:30, mapH:20, zoom:1.5};
+  env.renderCfg = {w:640, h:480, pixelPerfect:true, scaleMode:'fit'};
+  env.TILE = 48;
+  env.PLAYER_TPL = {animObject:null, animController:null, animBowObject:null, animBowController:null};
+  env.FAIRY_TPL = {animObject:null, animController:null};
+
+  // ---- Canvas ----
+  var canvas = document.getElementById('c');
+  var ctx    = canvas.getContext('2d');
+
+  // ---- Public state ----
+  env.map        = [];
+  env.entities   = [];
+  env.particles  = [];
+  env.dmgNums    = [];
+  env.projectiles= [];
+  env.fairies    = [];
+  env.player     = null;
+  env.camera     = new CameraController(env).make(0, 0);
+  // modal: null | 'inventory' | 'pause' | 'gameover' | 'win' | 'mainmenu' | 'controls'
+  env.modal      = 'mainmenu';
+  env.canvasButtons = [];
+  env.annotations   = [];
+  env.gameOver   = false;
+  env.invPage    = 0; // shared inventory page (used by HUD class)
+  env.invSelection = 0;
+
+  // ---- Global persistent state (survives restart/floor change) ----
+  // rescuedFairies: { fairyId: true/false }
+  // playerStats: saved on restart (not new game)
+  env.globalState = {
+    rescuedFairies: {},
+    playerStats: null   // set on "restart" to preserve stats
+  };
+
+  env.pathfinder = new PathFinder(env);
+
+  // ---- Dialogue system ----
+  var dlg = new DialogueSystem(env);
+  env.dialogue = dlg;
+  env.modalTimer = 0;
+
+  var paused = false, floorNum = 1;
+  var keys = {}, moveTimer = 0, MOVE_DELAY = 0.15;
+  var freeCameraMode = false;
+
+  // Menu state
+  env.menuState = {mainMenu : 0, pauseMenu : 0, winLose : 0};
+
+  // Pause menu items
+  var PAUSE_ITEMS = ['ПРОДОЛЖИТЬ', 'НОВЫЙ ЭТАЖ', 'РЕСТАРТ', 'ГЛАВНОЕ МЕНЮ'];
+
+  // ---- HUD/UI system ----
+  var gameUI = null; // initialized after canvas ready
+  
+  var KEY_GROUPS = {
+      up:        ['arrowup', 'w', 'ц'],
+      down:      ['arrowdown', 's', 'ы'],
+      left:      ['arrowleft', 'a', 'ф'],
+      right:     ['arrowright', 'd', 'в'],
+      confirm:   ['enter', ' ', 'e', 'у'],
+      cancel:    ['escape', 'backspace'],
+      inventory: ['i', 'ш'],
+      shoot:     ['f', 'а']
+    };
+    
+    function isKey(e, group){
+        var key = e.key.toLowerCase();
+        return KEY_GROUPS[group] && KEY_GROUPS[group].includes(key);
+    }
+    
+  // ---- isWall ----
+  env.isWall = function(c, r) {
+    if (r<0||r>=env.cfg.mapH||c<0||c>=env.cfg.mapW) return true;
+    if (env.map[r][c] === 1) return true;
+    for(var i=env.entities.length-1;i>=0;i--){
+      var e=env.entities[i];
+      if(e.isChest && !e.broken && e.c===c&&e.r===r) return true;
+      if(e.isCage && e.c===c&&e.r===r) return true;
+    }
+    return false;
+  };
+
+  // ---- Annotations ----
+  var LOG_COLORS = {hit:'#dd4444', kill:'#ffcc00', pick:'#44cc88', quest:'#8899ff', fairy:'#ff88ff', info:'#888'};
+  env.addLog = function(text, cls) {
+    var color = LOG_COLORS[cls] || LOG_COLORS.info;
+    env.annotations.unshift({text:text, color:color, life:3.2, maxLife:3.2});
+    if (env.annotations.length > 3) env.annotations.length = 3;
+  };
+
+  // ---- Combat helper ----
+  env.doCombat = function(a, d, rndAMin, rndAMax, min) {
+    if (typeof rndAMin == 'undefined') rndAMin = -1; 
+    if (typeof rndAMax == 'undefined') rndAMax = 1; 
+    if (typeof min == 'undefined') min = 1; 
+    var max = a - (d||0) + randi(rndAMin, rndAMax);
+    if (max < 1) max = 1;
+    return randi(min, max);     
+  };
+
+  // ---- Sprite draw helper ----
+  env.drawSpr = function(ctx, k, x, y, sz) {
+    var s = SPRITES[k];
+    if (s && s.img) {
+      var sz1 = env.TILE * s.scale;
+      ctx.drawImage(s.img, x - sz1/2 + s.ox, y - sz1/2 + s.oy, sz1, sz1);
+    } 
+  }
+
+  // ---- Particle factories ----
+  env.spawnParticle = function(x, y, vx, vy, life, color, size, type) {
+    var p = new Particle(env);
+    env.particles.push(p.make(x, y, vx, vy, life, color, size, type));
+  };
+
+  env.spawnHit = function(wx, wy, dc, dr, col) {
+    for (var i = 0; i < 7; i++) {
+      var a = Math.atan2(dr, dc) + rand(-0.8, 0.8), s = rand(60, 140);
+      env.spawnParticle(wx, wy, Math.cos(a)*s, Math.sin(a)*s, rand(0.15,0.35), col||'#ffcc44', rand(2,5));
+    }
+    env.spawnParticle(wx, wy, 0, 0, 0.15, '#fff', 12, 'cx');
+  };
+
+  env.spawnDeath = function(wx, wy, col) {
+    for (var i = 0; i < 12; i++) {
+      var a = rand(0, Math.PI*2);
+      env.spawnParticle(wx, wy, Math.cos(a)*rand(40,110), Math.sin(a)*rand(40,110), rand(0.2,0.5), col||'#cc4444', rand(3,7));
+    }
+  };
+
+  env.spawnFairyFX = function(wx, wy, col) {
+    for (var i = 0; i < 22; i++) {
+      var a = rand(0, Math.PI*2);
+      env.spawnParticle(wx, wy, Math.cos(a)*rand(30,90), Math.sin(a)*rand(30,90), rand(0.4,1.0), col||'#ff88ff', rand(3,8));
+    }
+  }
+
+  env.spawnDmgNum = function(wx, wy, dmg, col) {
+    var d = new DmgNum(env);
+    env.dmgNums.push(d.make(wx, wy, dmg, col));
+  };
+  
+  env.getNPCTpl = function(key) {
+       for (var i=0; i < NPC_TMPL.length; i++) {
+            if (NPC_TMPL[i].id == key) return NPC_TMPL[i];
+       }
+       
+       return null;
+  }
+
+
+  env.drawInteractHint = function(c, r, drawX, drawY, text, options) {
+    if(env.player){
+      
+      var d = mdist(c, r, env.player.c, env.player.r);
+      
+      if (typeof options == 'undefined') options = {checkD : 1, fontSize : 7};
+      
+      if(d === options.checkD){
+        var pulse = 0.6 + 0.4*Math.sin(Date.now()*0.005);
+        ctx.globalAlpha = pulse;
+        ctx.fillStyle='#aabbff';
+        ctx.font= options.fontSize + 'px Courier New';
+        ctx.textAlign='center';ctx.textBaseline='bottom';
+        ctx.fillText(text || '[E / Space]', drawX, drawY);
+        ctx.globalAlpha=1;
+      }
+    }
+  }
+  
+  // ---- Projectile factory ----
+  function spawnProjectile(fx, fy, dc, dr, atk) {
+    var speed = env.TILE * 9;
+    var p = new Projectile(env);
+    env.projectiles.push(p.make(fx, fy, dc * speed, dr * speed, atk, 10));
+  }
+
+  // ---- Entity makers ----
+  function makeMonster(type, c, r) {
+    var m = new Monster(env);
+    return m.make(type, c, r);
+  }
+
+  function makeItem(type, c, r) {
+    var m = new ItemEntity(env);
+    return m.make(type, c, r);
+  }
+
+  function makeCage(fid, c, r) {
+    var m = new CageEntity(env);
+    return m.make(fid, c, r);
+  }
+
+  function makeChest(c, r) {
+    return {
+    
+      isChest:true, x:c*env.TILE+env.TILE/2, y:r*env.TILE+env.TILE/2, c:c, r:r,
+      opened:false, broken:false, hopTimer:rand(0,10), bob:rand(0,Math.PI*2)};
+  }
+
+  function makeNpc(id, c, r) {
+    var n = new NpcEntity(env);
+    return n.make(id, c, r);
+  }
+
+  // ---- Cell occupation tracker (for spawn collision avoidance) ----
+  function buildOccupied() {
+    var occ = {};
+    // Tiles of type 2 (stairs)
+    for (var r = 0; r < env.cfg.mapH; r++) {
+      for (var c = 0; c < env.cfg.mapW; c++) {
+        if (env.map[r][c] === 2) occ[c + ',' + r] = true;
+      }
+    }
+    // Existing entities
+    for (var i = 0; i < env.entities.length; i++) {
+      var e = env.entities[i];
+      if (e.c !== undefined && e.r !== undefined) occ[e.c + ',' + e.r] = true;
+    }
+    return occ;
+  }
+
+  function occupy(occ, c, r) { occ[c + ',' + r] = true; }
+  function isFree(occ, c, r) { return !occ[c + ',' + r] && env.map[r] && env.map[r][c] === 0; }
+
+  function findFreeCell(occ, room, tries) {
+    tries = tries || 30;
+    for (var t = 0; t < tries; t++) {
+      var tc = room.c + randi(1, room.w - 2);
+      var tr = room.r + randi(1, room.h - 2);
+      if (isFree(occ, tc, tr)) return {c: tc, r: tr};
+    }
+    return null;
+  }
+
+  // ---- Generation ----
+  function generate() {
+  
+    resetKeys();
+    
+    env.cfg.mapW = 30; env.cfg.mapH = 20;
+    env.modal = null; env.canvasButtons = []; env.annotations = [];
+    env.fairies = [];
+    dlg.close();
+    env.map = [];
+
+    for (var r = 0; r < env.cfg.mapH; r++) {
+      env.map[r] = [];
+      for (var c = 0; c < env.cfg.mapW; c++) env.map[r][c] = 1;
+    }
+
+    var rooms = [];
+    for (var att = 0; att < 60; att++) {
+      var rw=randi(4,9), rh=randi(3,7);
+      var rc=randi(1,env.cfg.mapW-rw-1), rr=randi(1,env.cfg.mapH-rh-1);
+      var ok = true;
+      for (var ri = 0; ri < rooms.length; ri++) {
+        var ro = rooms[ri];
+        if (rc<=ro.c+ro.w+1&&rc+rw>=ro.c-1&&rr<=ro.r+ro.h+1&&rr+rh>=ro.r-1){ok=false;break;}
+      }
+      if (!ok) continue;
+      for (var ry=rr;ry<rr+rh;ry++) for (var rx=rc;rx<rc+rw;rx++) env.map[ry][rx]=0;
+      rooms.push({c:rc,r:rr,w:rw,h:rh,cx:rc+Math.floor(rw/2),cr:rr+Math.floor(rh/2)});
+    }
+
+    rooms.sort(function(a,b){return a.cx-b.cx;});
+    for (var i = 0; i < rooms.length-1; i++) {
+      var A=rooms[i],B=rooms[i+1],x=A.cx,y=A.cr;
+      while(x!==B.cx){env.map[y][x]=0;x+=x<B.cx?1:-1;}
+      while(y!==B.cr){env.map[y][x]=0;y+=y<B.cr?1:-1;}
+    }
+
+    env.entities=[]; env.particles=[]; env.dmgNums=[]; env.projectiles=[];
+
+    var sr = rooms[0]||{cx:2,cr:2};
+
+    // Player setup
+    if (!env.player) {
+      var p = new Player(env);
+      env.player = p.make(sr.cx, sr.cr);
+      // Restore preserved stats if any (from restart)
+      if (env.globalState.playerStats) {
+        var s = env.globalState.playerStats;
+        env.player.hp = s.hp; env.player.maxHp = s.maxHp;
+        env.player.atk = s.atk; env.player.def = s.def;
+        env.player.xp = s.xp; env.player.xpNext = s.xpNext;
+        env.player.level = s.level; env.player.gold = s.gold;
+        env.player.weapon = s.weapon; env.player.weapons = s.weapons.slice();
+        env.player.arrows = s.arrows; env.player.stamina = s.stamina;
+        env.player.maxStamina = s.maxStamina; env.player.statPoints = s.statPoints;
+        env.player.mana = s.mana || 60; env.player.maxMana = s.maxMana || 60;
+        env.player.items = s.items.map(function(x){return {kind:x.kind};});
+        env.player.fairyKeys = {};
+        env.globalState.playerStats = null;
+      }
+    } else {
+      var pl = env.player;
+      pl.c=sr.cx; pl.r=sr.cr;
+      pl.x=sr.cx*env.TILE+env.TILE/2; pl.y=sr.cr*env.TILE+env.TILE/2;
+      pl.hp=Math.min(pl.maxHp, pl.hp+4);
+      // Clear keys for new floor
+      pl.fairyKeys = {};
+    }
+    
+    // var fx = env.player.c * env.TILE + env.TILE/2, fy = env.player.r * env.TILE + env.TILE/2;
+    //var f = new Fairy(env);
+    //env.fairies.push(f.make(CDEFS[0], fx, fy));
+  
+    // Build occupied map
+    var occ = {};
+    // Mark player start
+    occupy(occ, sr.cx, sr.cr);
+    
+    // map[env.player.r][env.player.c] = 2;
+  
+    //  env.entities.push(makeCage('a', env.player.c+1, env.player.r) );
+    //  occupy(occ, env.player.c+1, env.player.r);
+    
+    // ---- Spawn starting NPC (Gormus) near first room - only floor 1 ----
+    if (floorNum === 1) {
+            var mentorCreated = false;
+          if (rooms.length > 0){
+          var npcRoom = rooms[0];
+          
+          var cell = findFreeCell(occ, npcRoom, 30);
+          // Also check distance from player
+          for (var ta = 0; ta < 30; ta++) {
+            var nc2 = npcRoom.c + randi(1, npcRoom.w - 2);
+            var nr3 = npcRoom.r + randi(1, npcRoom.h - 2);
+            var dist = mdist(nc2, nr3, sr.cx, sr.cr);
+            if (dist >= 2 && dist <= 4 && isFree(occ, nc2, nr3)) {
+              env.entities.push(makeNpc('mentor', nc2, nr3));
+              occupy(occ, nc2, nr3);
+              mentorCreated = true;
+              break;
+            }
+          }
+      }
+      
+      if (!mentorCreated) {
+            console.log('fallback  to place NPC');
+            env.entities.push(makeNpc('mentor', env.player.c+1, env.player.r));
+            occupy(occ, env.player.c+1, env.player.r);
+      }
+    }
+
+    var mTypes = Object.keys(MDEFS);
+
+    // ---- Determine which fairies appear this floor ----
+    // Rules: ruby (index 0) on 1+, azure (index 1) on 2+, gold (index 2) on 4+
+    // Only spawn cage if fairy not yet rescued globally
+    // Max 1 cage per floor
+    var fairyMinFloor = {0: 1, 1: 2, 2: 4}; // index in CDEFS
+    var unrescuedFairies = [];
+    for (var fi = 0; fi < CDEFS.length; fi++) {
+      var fdef = CDEFS[fi];
+      if (!env.globalState.rescuedFairies[fdef.id] && floorNum >= (fairyMinFloor[fi] || 1)) {
+        unrescuedFairies.push(fdef);
+      }
+    }
+    shuffleArr(unrescuedFairies);
+    // Max 1 cage this floor
+    var activeFairyDef = unrescuedFairies.length > 0 ? [unrescuedFairies[0]] : [];
+    var activeFairyId = activeFairyDef.length > 0 ? activeFairyDef[0].id : null;
+
+    // Rebuild stairs FIRST so occ knows where they are
+    var stairC = -1, stairR = -1;
+    if (rooms.length > 1) {
+      var lr = rooms[rooms.length - 1];
+      // Try center of last room
+      stairC = lr.cx; stairR = lr.cr;
+      if (env.map[stairR]) env.map[stairR][stairC] = 2;
+      occupy(occ, stairC, stairR);
+    }
+
+    // ---- Spawn monsters and items ----
+    for (var i = 1; i < rooms.length; i++) {
+      var room = rooms[i], cnt = randi(1, 3 + (floorNum > 2 ? 2 : 0));
+
+      // Boss in last room
+      if (i === rooms.length - 1) {
+        var bmt = 'boss';
+        if(floorNum<=1) bmt='skeleton'; else if(floorNum<=2) bmt='spider';
+        var bossCell = findFreeCell(occ, room, 20);
+        if (bossCell) {
+          var boss = makeMonster(bmt, bossCell.c, bossCell.r);
+          // Boss guaranteed key drop if fairy active and not yet dropped
+          if (activeFairyId) boss.keyDrop = 'key_' + activeFairyId;
+          env.entities.push(boss);
+          occupy(occ, bossCell.c, bossCell.r);
+        }
+      }
+
+      for (var k = 0; k < cnt; k++) {
+        var cell2 = findFreeCell(occ, room, 15);
+        if (!cell2) continue;
+        var mt = mTypes[0];
+        if(floorNum===1){if(randi(0,100)>80) mt=mTypes[1];}
+        else mt=mTypes[randi(0,Math.min(mTypes.length-2,floorNum))];
+        var mob = makeMonster(mt, cell2.c, cell2.r);
+        // Regular mobs do NOT drop keys
+        env.entities.push(mob);
+        occupy(occ, cell2.c, cell2.r);
+      }
+
+    
+      if (Math.random() < 0.5) {
+        var cell3 = findFreeCell(occ, room, 15);
+        if (cell3) {
+          var lr2 = Math.random();
+          if (lr2 < 0.35){} //env.entities.push(makeItem('gold', cell3.c, cell3.r));
+          else if (lr2 < 0.6) {}// env.entities.push(makeItem('potion', cell3.c, cell3.r));
+          else {
+            var ch = makeChest(cell3.c, cell3.r);
+            env.entities.push(ch);
+            occupy(occ, cell3.c, cell3.r);
+          }
+        }
+      }
+     
+      
+      if (Math.random() < 0.3) {
+        var cell4 = findFreeCell(occ, room, 15);
+        if (cell4) {
+          var ch2 = makeChest(cell4.c, cell4.r);
+          env.entities.push(ch2);
+          occupy(occ, cell4.c, cell4.r);
+        }
+      }
+      if (i === 1 && Math.random() < 0.6 && !(env.player.weapons || []).includes('bow')) {
+        var cell5 = findFreeCell(occ, room, 15);
+        if (cell5) env.entities.push(makeItem('bow', cell5.c, cell5.r));
+      }
+      // Staff spawn: room 2+ with 30% chance if not already have it
+      if (i === 2 && Math.random() < 0.5 && !(env.player.weapons || []).includes('staff')) {
+        var cellSt = findFreeCell(occ, room, 15);
+        if (cellSt) env.entities.push(makeItem('staff', cellSt.c, cellSt.r));
+      }
+      //if (Math.random() < 0.4) {
+      //  var cell6 = findFreeCell(occ, room, 15);
+      //  if (cell6) env.entities.push(makeItem('arrows', cell6.c, cell6.r));
+      //}
+    }
+
+    // ---- Spawn fairy cage (max 1 per floor, in last rooms) ----
+    if (activeFairyId) {
+      var cageRooms = rooms.slice(Math.max(1, rooms.length - 3));
+      var placed = false;
+      for (var cri = 0; cri < cageRooms.length && !placed; cri++) {
+        var crm = cageRooms[cri];
+        var cc3 = findFreeCell(occ, crm, 20);
+        if (cc3) {
+          env.entities.push(makeCage(activeFairyId, cc3.c, cc3.r));
+          occupy(occ, cc3.c, cc3.r);
+          placed = true;
+        }
+      }
+    }
+
+    centerCamera();
+    env.gameOver = false;
+    env.addLog('Этаж ' + floorNum + ' — добро пожаловать!', 'info');
+
+    env.player.blockingMove(0, 0);
+  }
+
+  // Save player stats for restart (preserving progress)
+  function savePlayerStats() {
+    if (!env.player) return;
+    var pl = env.player;
+    env.globalState.playerStats = {
+      hp: pl.maxHp, maxHp: pl.maxHp,
+      atk: pl.atk, def: pl.def,
+      xp: pl.xp, xpNext: pl.xpNext,
+      level: pl.level, gold: pl.gold,
+      weapon: pl.weapon, weapons: pl.weapons.slice(),
+      arrows: pl.arrows, stamina: pl.stamina,
+      maxStamina: pl.maxStamina, statPoints: pl.statPoints,
+      mana: pl.mana, maxMana: pl.maxMana,
+      items: (pl.items || []).map(function(x){return {kind:x.kind};})
+    };
+  }
+
+  // Restart: same floor, but player dies and returns — keep stats, reset floor
+  function restart() {
+    savePlayerStats();
+    env.player = null;
+    // floorNum stays the same
+    generate();
+  }
+
+  // New game: reset everything
+  function newGame() {
+    floorNum = 1;
+    env.player = null;
+    env.globalState = { rescuedFairies: {}, playerStats: null };
+    generate();
+  }
+
+  // ---- Item drop from mob ----
+  env.dropItemFromMob = function(type, mob) {
+    if (!IDEFS[type]||!env.player) return;
+    var cells=[];
+    var dirs=[{dc:1,dr:0},{dc:-1,dr:0},{dc:0,dr:1},{dc:0,dr:-1}];
+    for(var i=0;i<dirs.length;i++){
+      var d={c:mob.c+dirs[i].dc,r:mob.r+dirs[i].dr};
+      if(env.player.c===d.c&&env.player.r===d.r) continue;
+      cells.push(d);
+    }
+    var valid=cells.filter(function(cell){return !env.isWall(cell.c,cell.r);});
+    var to=valid.length>0?valid[randi(0,valid.length-1)]:{c:mob.c,r:mob.r};
+    var it=makeItem(type,to.c,to.r);
+    
+    
+    var tx=to.c*env.TILE+env.TILE/2, ty=to.r*env.TILE+env.TILE/2;
+    it.x=mob.x; it.y=mob.y;
+    it.fly={sx:mob.x,sy:mob.y,tx:tx,ty:ty,t:0,dur:0.35};
+    env.entities.push(it);
+    
+    return it;
+  };
+
+  function tryMelee(dc, dr){
+    if(!env.player||env.gameOver||env.modal||dlg.active) return false;
+    return env.player.attack(dc, dr);
+  }
+
+  function startNpcDialogue(npc) {
+    var script = NPC_SCRIPTS[npc.npcId] || NPC_SCRIPTS['mentor'];
+    var startIdx = (npc.npcId === 'mentor' && npc.dialogSeen) ? 1 : 0;
+    dlg.start(npc, script, startIdx);
+    npc.dialogSeen = true;
+    env.addLog('Говоришь с ' + npc.name, 'info');
+  }
+
+  function tryUseStairs(){
+    if(!env.player||env.gameOver||env.modal||dlg.active) return false;
+    var pl=env.player;
+    // todo - check fairys and let choose floor
+    if(env.map[pl.r]&&env.map[pl.r][pl.c]===2) {
+        env.addLog('▼ Этаж '+(floorNum+1),'info');
+        floorNum++;
+        generate();
+        return true;
+    }
+    return false;
+  }
+
+  function tryInteractOrAttack(){
+    if(dlg.active){ dlg.onConfirm(); return; }
+    if(env.modal==='inventory'){closeModal();return;}
+    if(env.modal) return;
+    // Ranged aiming: E/Space fires
+    if(env.player && env.player.bowAiming){ env.player.rangedShoot(); return; }
+    if(tryUseStairs()) return;
+    var dc=env.player.lastDc, dr=env.player.lastDr;
+    if(dc===0&&dr===0){dc=1;dr=0;}
+    // Staff uses F not E; melee for sword
+    if (tryMelee(dc,dr,true)) return;
+    
+    
+    
+    if (tryDialog(env.player.c, env.player.r, true)) return;
+    if (tryOpenProp(env.player.c, env.player.r, dc, dr)) return;
+    
+    
+    if (env.player.isRangedWeapon && env.player.isRangedWeapon()) {
+        env.player.enterAim();
+        env.player.rangedShoot();
+        
+    } else {
+    
+        env.player.whiff(dc, dr);
+    }
+  }
+
+  function tryDialog(nc, nr, byDist) {
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];
+      if(e.isNpc){
+        var near = false;
+        if (byDist) {
+          near = mdist(e.c, e.r, nc, nr) === 1;
+        } else {
+          near = (e.c===nc && e.r===nr) && e.blocking === 1;
+        }
+        if (!near) continue;
+        startNpcDialogue(e);
+        return true;
+      }
+    }
+    return false;
+  }
+
+
+  function quickEquipWeapon(slot) {
+    if(!env.player||env.gameOver||env.modal||dlg.active) return false;
+    env.player.equipWeapon(slot);
+    return true;
+  }
+
+  function quickUsePotion() {
+    if(!env.player||env.gameOver||env.modal||dlg.active) return false;
+    env.player.usePotion();
+    return true;
+  }
+
+  function tryOpenProp(nc, nr, dc, dr) {
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];
+      
+      if ((!e.isChest && !e.isCage) || e.broken) continue;
+      
+      var near = mdist(e.c, e.r, nc, nr) === 1;
+      if (!near) continue;
+      
+      var breakProp = false;
+      if (e.isChest) {
+      
+          if (!e.opened) {
+            openChest(e);
+          } else {
+            breakProp = true;
+          }
+          
+      } else {
+      
+        if (!e.freed) {
+            e.releaseFairy();
+        } else {
+            breakProp = true;
+        }
+      }
+      
+      if (breakProp) {
+      
+        e.broken = true;
+        env.spawnFairyFX(e.x, e.y, '#996633');
+        return false;
+        
+      } else {
+        return true;
+      }
+      
+    }
+    return false;
+  }
+
+  function tryMove(dc, dr){
+    if(!env.player||env.gameOver||env.modal||dlg.active) return;
+    var pl=env.player;
+
+    pl.lastDc=dc; pl.lastDr=dr;
+    var oldFacing=pl.facing;
+    if(dc!==0) pl.facing=dc>0?-1:1;
+    var nc=pl.c+dc, nr=pl.r+dr;
+    if(nr<0||nr>=env.cfg.mapH||nc<0||nc>=env.cfg.mapW) return;
+    if(tryMelee(dc,dr,false)) return;
+    if(env.isWall(nc,nr)) return env.player.blockingMove(0, 0);// pl.blockingMove(dc, dr);
+    if(oldFacing!==pl.facing) return;
+    if (tryDialog(nc, nr, false)) return;
+
+    pl.c=nc; pl.r=nr; pl.moveHop=1;
+
+    for(var i=env.entities.length-1; i>=0; i--){
+      var e = env.entities[i];
+      if(e.isItem && e.c===nc && e.r===nr) {
+        e.pickup();
+        env.entities.splice(i, 1);
+      }
+    }
+
+  }
+
+
+  function tryShoot(){
+    if(!env.player||env.gameOver||env.modal||dlg.active) return;
+    var pl = env.player;
+    if (pl.weapon === 'bow' || pl.weapon === 'staff') {
+       if (pl.bowAiming) env.player.rangedShoot();
+       else pl.enterAim();
+    } else {
+    
+      env.addLog('Экипируй лук или посох [I]','info');
+    }
+  }
+  
+  function openChest(chest){
+    chest.opened=true;
+    env.spawnFairyFX(chest.x,chest.y,'#d4a830');
+    var r=Math.random();
+    // Chests can drop keys (boss drops handled separately)
+   
+    if(r<0.35){env.dropItemFromMob('arrows',chest);}
+    else if(r<0.78){env.dropItemFromMob('potion',chest);}
+    else if(r<0.78){env.dropItemFromMob('gold',chest).valLocal = randi(1,4); }
+    else {
+      // Try to drop a key for an unrescued fairy
+      var needKeys = CDEFS.filter(function(d){ return !env.globalState.rescuedFairies[d.id] && !env.player.fairyKeys[d.id]; });
+      if(needKeys.length > 0){
+        var lk = needKeys[randi(0, needKeys.length-1)];
+        env.dropItemFromMob('key_' + lk.id, chest);
+      } else {
+        env.dropItemFromMob('gold', chest).valLocal = randi(1,4);
+      }
+    }
+  }
+
+  // ---- Modal helpers ----
+  function openInventory(){if(!env.player||dlg.active)return;env.modal='inventory';env.invPage=0;env.invSelection=0;env.canvasButtons=[];}
+  function closeModal(){env.modal=null;env.canvasButtons=[];resetKeys();}
+
+  function openPause(){
+    if(env.gameOver||env.modal==='gameover'||env.modal==='win') return;
+    env.modal='pause'; env.menuState.pauseMenu=0;
+  }
+  
+  function closePause(){ env.modal=null; }
+
+  // ---- Shadow helper ----
+  env.drawShadow = function(ctx, unit, Z) {
+    var px=unit.x, py=unit.y+env.TILE*0.26;
+    ctx.save(); ctx.translate(px,py);
+    var shadowW=env.TILE*0.34+(1-Z)*env.TILE*0.12;
+    var shadowH=env.TILE*0.11+(1-Z)*env.TILE*0.04;
+    ctx.fillStyle='rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(0,0,shadowW,shadowH,0,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  };
+
+  // ---- Update ----
+  var lastTime=0;
+  function update(dt){
+    // Main menu / controls screen - no game update
+    
+    
+    if(env.modal==='mainmenu'||env.modal==='controls') {
+        
+        gameUI.update(dt);
+        return;
+    }
+
+    if(paused || env.modal==='pause') return;
+    dlg.update(dt);
+    
+    
+    if( env.modalTimer > 0) env.modalTimer-= dt;
+
+    // Ranged aiming mode: WASD/arrows tweak aiming without moving
+
+    if(env.player && !dlg.active && !env.player.bowAiming){
+      env.player.update(dt);
+      moveTimer-=dt;
+      if(moveTimer<=0&&!env.modal){
+        var mv=false;
+        if (freeCameraMode) {
+          if(keys['up']){env.camera.moveCell(0,-1);mv=true;}
+          else if(keys['down']){env.camera.moveCell(0,1);mv=true;}
+          else if(keys['left']){env.camera.moveCell(-1,0);mv=true;}
+          else if(keys['right']){env.camera.moveCell(1,0);mv=true;}
+          if(mv) moveTimer=MOVE_DELAY;
+        } else {
+          var aimDelay = (env.player.bowAiming) ? 0.04 : MOVE_DELAY;
+          // Aiming controls for ranged mode
+          if(env.player.bowAiming){
+            if(keys['up']){ tryMove(0,-1); mv=true; }
+            else if(keys['down']){ tryMove(0,1); mv=true; }
+            else if(keys['left']){ tryMove(-1,0); mv=true; }
+            else if(keys['right']){ tryMove(1,0); mv=true; }
+          } else {
+            if(keys['up']){tryMove(0,-1);mv=true;}
+            else if(keys['down']){tryMove(0,1);mv=true;}
+            else if(keys['left']){tryMove(-1,0);mv=true;}
+            else if(keys['right']){tryMove(1,0);mv=true;}
+          }
+          if(mv) moveTimer=aimDelay;
+        }
+      }
+      if (!freeCameraMode) {
+        env.camera.target.x = env.player.x;
+        env.camera.target.y = env.player.y;
+      }
+      
+      env.camera.panTo(0.05);
+        
+    } else if(env.player){
+      env.player.update(dt);
+      env.camera.panTo(0.05);
+    }
+
+    if(!dlg.active){
+      for(var i=0;i<env.entities.length;i++){
+        var e=env.entities[i];
+        if(e.isMonster&&!e.dead) e.update(dt);
+      }
+    }
+
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];
+      
+      if (e.isCage && !e.freed && e.fairyAnim) {
+        e.fairyAnim.update(dt);
+      }
+      if(e.isItem&&e.fly){
+        e.fly.t+=dt;
+        var k=Math.min(1,e.fly.t/e.fly.dur);
+        var ease=1-Math.pow(1-k,3);
+        e.x=e.fly.sx+(e.fly.tx-e.fly.sx)*ease;
+        e.y=e.fly.sy+(e.fly.ty-e.fly.sy)*ease;
+        e.y-=Math.sin(k*Math.PI)*18;
+        if(k>=1) e.fly=null;
+      }
+      if(e.isItem||e.isNpc) e.hopTimer=(e.hopTimer||0)+dt*(e.hopSpeed||4);
+    }
+
+    for(var i=env.particles.length-1;i>=0;i--){
+      if(!env.particles[i].update(dt)) env.particles.splice(i,1);
+    }
+    for(var i=env.dmgNums.length-1;i>=0;i--){
+      if(!env.dmgNums[i].update(dt)) env.dmgNums.splice(i,1);
+    }
+    for(var i=env.projectiles.length-1;i>=0;i--){
+      if(!env.projectiles[i].update(dt)) env.projectiles.splice(i,1);
+    }
+    for(var i=env.fairies.length-1;i>=0;i--){
+      if(!env.fairies[i].update(dt)) env.fairies.splice(i,1);
+    }
+    for(var i=env.annotations.length-1;i>=0;i--){
+      env.annotations[i].life-=dt;
+      if(env.annotations[i].life<=0) env.annotations.splice(i,1);
+    }
+  }
+
+  // ---- Render ----
+  function render(){
+    var W=canvas.width,H=canvas.height;
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle='#0a0a08';ctx.fillRect(0,0,W,H);
+
+    // Main menu / controls - delegate to UI
+    if(env.modal==='mainmenu'){
+      gameUI.drawMainMenu(env.menuState.mainMenu);
+      return;
+    }
+    if(env.modal==='controls'){
+      gameUI.drawControls();
+      return;
+    }
+
+    ctx.save();
+    ctx.translate(W/2,H/2);ctx.scale(env.cfg.zoom,env.cfg.zoom);ctx.translate(-env.camera.x,-env.camera.y);
+
+    drawMap();
+    drawAttackDir();
+    drawShadows();
+    drawChests();
+    drawCages();
+    drawItems();
+    drawNpcs();
+
+    var ac = env.PLAYER_TPL.animController;
+    var isAttacking = ac && ac.getAnim && ac.getAnim() === 'attack';
+
+    if(isAttacking){
+      drawMonsters();
+      if(env.player&&env.player.hp>0) env.player.draw(ctx);
+    } else {
+      if(env.player&&env.player.hp>0) env.player.draw(ctx);
+      drawMonsters();
+    }
+
+    for(var i=0;i<env.fairies.length;i++) env.fairies[i].draw(ctx);
+    for(var i=0;i<env.particles.length;i++) env.particles[i].draw(ctx);
+    for(var i=0;i<env.dmgNums.length;i++) env.dmgNums[i].draw(ctx);
+    for(var i=0;i<env.projectiles.length;i++) env.projectiles[i].draw(ctx);
+    if (freeCameraMode) env.camera.drawPosCell(ctx);
+
+    if(env.map[env.player.r]&&env.map[env.player.r][env.player.c]===2) {
+        env.drawInteractHint(env.player.c, env.player.r, env.player.x, env.player.y + env.TILE/2 + 16, '[E / Space] - Спустится', {checkD : 0, fontSize : 7});
+    }
+    
+    ctx.restore();
+
+    gameUI.drawHUD(floorNum);
+
+    if(dlg.active) dlg.draw(ctx, W, H);
+    
+    if(env.modal){
+      if (env.modalTimer<= 0) {
+        if(env.modal==='inventory') gameUI.drawInventory(env.invPage, floorNum);
+        else if(env.modal==='pause') gameUI.drawPauseMenu(env.menuState.pauseMenu);
+        else if(env.modal==='win'||env.modal==='gameover') gameUI.drawWinLose(env.menuState.winLose, floorNum);
+      }
+    }
+  }
+
+  // ---- Map drawing ----
+  function drawMap(){
+    var sc=Math.max(0,Math.floor((env.camera.x-canvas.width/env.cfg.zoom/2)/env.TILE)-1);
+    var sr=Math.max(0,Math.floor((env.camera.y-canvas.height/env.cfg.zoom/2)/env.TILE)-1);
+    var ec=Math.min(env.cfg.mapW,sc+Math.ceil(canvas.width/env.cfg.zoom/env.TILE)+3);
+    var er=Math.min(env.cfg.mapH,sr+Math.ceil(canvas.height/env.cfg.zoom/env.TILE)+3);
+    for(var r=sr;r<er;r++){
+      for(var c=sc;c<ec;c++){
+        var x=c*env.TILE,y=r*env.TILE,tile=env.map[r]&&env.map[r][c];
+        if(tile===1){
+          ctx.fillStyle='#2b3235';ctx.fillRect(x,y,env.TILE,env.TILE);
+          ctx.fillStyle='#444f54';ctx.fillRect(x,y,env.TILE,3);ctx.fillRect(x,y,3,env.TILE);
+          ctx.fillStyle='rgba(0,0,0,0.25)';ctx.fillRect(x+env.TILE-2,y,2,env.TILE);ctx.fillRect(x,y+env.TILE-2,env.TILE,2);
+          
+        } else if(tile===0 ||tile===3){
+        
+          ctx.fillStyle=(r+c)%2===0?'#384144':'#525d60';ctx.fillRect(x,y,env.TILE,env.TILE);
+          ctx.fillStyle='rgba(0,0,0,0.1)';ctx.fillRect(x,y,env.TILE,1);ctx.fillRect(x,y,1,env.TILE);
+          
+          if(tile===3) drawSpr(ctx,'tombstone',x+env.TILE/2,y+env.TILE/2,0);
+          
+        } else if(tile===2){
+          ctx.fillStyle='#161a0e';ctx.fillRect(x,y,env.TILE,env.TILE);
+          var g=ctx.createRadialGradient(x+env.TILE/2,y+env.TILE/2,3,x+env.TILE/2,y+env.TILE/2,env.TILE*0.65);
+          g.addColorStop(0,'rgba(180,164,70,0.22)');g.addColorStop(1,'transparent');
+          ctx.fillStyle=g;ctx.fillRect(x,y,env.TILE,env.TILE);
+          ctx.fillStyle='#a89848';ctx.font='bold 16px Courier New';
+          ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('▼',x+env.TILE/2,y+env.TILE/2);
+        }
+      }
+    }
+  }
+
+  function drawAttackDir(){
+    if(!env.player||env.player.hp<=0) return;
+    // Don't show normal attack indicator during bow aiming
+    if(env.player.bowAiming) return;
+    var dc=env.player.lastDc,dr=env.player.lastDr;if(dc===0&&dr===0) return;
+    var tc=env.player.c+dc,tr=env.player.r+dr;if(env.isWall(tc,tr)) return;
+    var hasM=env.entities.some(function(e){return (e.isMonster&&!e.dead||e.isNpc)&&e.c===tc&&e.r===tr;});
+    if(!hasM){
+      ctx.fillStyle='rgba(255,255,180,0.06)';ctx.fillRect(tc*env.TILE,tr*env.TILE,env.TILE,env.TILE);
+      ctx.fillStyle='rgba(255,255,180,0.18)';ctx.font='11px Courier New';ctx.textAlign='center';ctx.textBaseline='middle';
+      var arr={'-1,0':'◀','1,0':'▶','0,-1':'▲','0,1':'▼'};
+      ctx.fillText(arr[dc+','+dr]||'',tc*env.TILE+env.TILE/2,tr*env.TILE+env.TILE/2);
+    }
+  }
+
+  function drawShadows(){
+    if(env.player && env.player.hp>0)  env.player.drawShadow(ctx);
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];
+      if(e.isMonster&&!e.dead) e.drawShadow(ctx);
+    }
+  }
+
+  function drawMonsters(){
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];
+      if(e.isMonster&&!e.dead) e.draw(ctx);
+    }
+  }
+
+  function drawNpcs(){
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];
+      if(!e.isNpc) continue;
+      e.draw(ctx, e);
+    }
+  }
+
+  function drawItems(){
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];
+      if(!e.isItem) continue;
+      e.draw(ctx);
+    }
+  }
+
+  function drawCages(){
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];
+      if(!e.isCage) continue;
+      e.draw(ctx);
+      
+    }
+  }
+
+  function drawChests(){
+    for(var i=0;i<env.entities.length;i++){
+      var e=env.entities[i];if(!e.isChest) continue;
+      
+      if(e.broken) continue; // don't draw broken chests
+      
+      var px=e.x,py=e.y,sz=env.TILE*0.56;
+      var half=sz/2;
+      ctx.save();ctx.translate(px,py);
+      drawSpr(ctx,e.opened?'chest_opened':'chest_clothed',0,0,sz);
+      ctx.restore();
+      env.drawInteractHint(e.c, e.r, px, py - half - 16);
+    }
+  }
+
+  // ---- Resize & Loop ----
+  function resize(){
+    var w=document.getElementById('canvas-wrap');
+    if(env.renderCfg.pixelPerfect){
+      var rw=env.renderCfg.w,rh=env.renderCfg.h;
+      if(canvas.width!==rw||canvas.height!==rh){canvas.width=rw;canvas.height=rh;}
+      var sx=w.clientWidth/rw,sy=w.clientHeight/rh;
+      var scale=Math.min(sx,sy);
+      canvas.style.width=Math.max(1,Math.floor(rw*scale))+'px';
+      canvas.style.height=Math.max(1,Math.floor(rh*scale))+'px';
+    } else {
+      canvas.style.width='100%';canvas.style.height='100%';
+      if(canvas.width!==w.clientWidth||canvas.height!==w.clientHeight){canvas.width=w.clientWidth;canvas.height=w.clientHeight;}
+    }
+    ctx.imageSmoothingEnabled=false;
+  }
+
+  function loop(ts){
+    var dt=Math.min((ts-lastTime)/1000,0.05);
+    lastTime=ts;
+    resize();update(dt);render();
+    requestAnimationFrame(loop);
+  }
+
+  function centerCamera(){
+    if(env.player){env.camera.setPos(env.player.x, env.player.y);}
+    else{env.camera.setPos(env.cfg.mapW*env.TILE/2, env.cfg.mapH*env.TILE/2);}
+  }
+  
+  function updateKeyStates(e, pressed) {
+  
+    var kTypes = Object.keys(KEY_GROUPS);
+    for (var i = 0; i < kTypes.length; i++) {
+        if(isKey(e, kTypes[i])) {
+            keys[kTypes[i]]=pressed;
+            return;
+        }
+    }
+  }
+  
+  function resetKeys() {
+    var kTypes = Object.keys(KEY_GROUPS);
+    for (var i = 0; i < kTypes.length; i++) {
+        keys[kTypes[i]]=false;
+    }
+  }
+  
+  function getMapPointFromClick(e) {
+      var p = getCanvasPoint(canvas, e.clientX, e.clientY);
+      var W = canvas.width, H = canvas.height;
+      // Convert canvas point to world coordinates
+      return {x : (p.x - W/2) / env.cfg.zoom + env.camera.x,
+              y : (p.y - H/2) / env.cfg.zoom + env.camera.y
+             };
+  }
+
+  // ---- Input ----
+  function bindEvents(){
+    window.addEventListener('keydown',function(e){
+   
+      updateKeyStates(e, true);
+      if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+    
+      if(e.repeat) return;
+           
+        if (env.player && env.player.bowAiming) {          
+            if(keys['up']){env.player.bowAimDir(0,env.player.facing);}
+            else if(keys['down']){env.player.bowAimDir(0, env.player.facing * -1);}
+            else if(keys['left']){env.player.bowAimDir(-1,0);}
+            else if(keys['right']){env.player.bowAimDir(1,0);}
+         
+        }
+        
+      // ---- Main Menu ----
+      if(env.modal==='mainmenu'){
+        var menuItems = ['НОВАЯ ИГРА', 'УПРАВЛЕНИЕ'];
+        if(keys['up']) env.menuState.mainMenu=(env.menuState.mainMenu-1+menuItems.length)%menuItems.length;
+        else if(keys['down']) env.menuState.mainMenu=(env.menuState.mainMenu+1)%menuItems.length;
+        else if(keys['confirm']){
+          if(env.menuState.mainMenu===0){ newGame(); }
+          else if(env.menuState.mainMenu===1){ env.modal='controls'; }
+        }
+        return;
+      }
+
+      // ---- Controls screen ----
+      if(env.modal==='controls'){
+        if(keys['cancel']) env.modal='mainmenu';
+        return;
+      }
+
+      // ---- Dialogue consumes keys first ----
+      if(dlg.active){
+        if(keys['up']) dlg.onUp();
+        else if(keys['down']) dlg.onDown();
+        else if(keys['confirm']) dlg.onConfirm();
+        else if(keys['cancel']) dlg.close();
+        return;
+      }
+
+      // ---- Win/Lose menu ----
+      if(env.modal==='gameover'||env.modal==='win'){
+        if(keys['cancel']) env.modalTimer = 0;
+        if (env.modalTimer > 0) return;
+        var items = env._winMenuItems || [];
+        if(keys['up']||keys['left']) env.menuState.winLose=Math.max(0,env.menuState.winLose-1);
+        else if(keys['down']||keys['right']) env.menuState.winLose=Math.min(items.length-1,env.menuState.winLose+1);
+        else if(keys['confirm']){
+          var sel=items[env.menuState.winLose]||'';
+          if(sel.includes('Следующий')){ floorNum++; env.player=null; generate(); }
+          else if(sel.includes('Рестарт')){ restart(); }
+          else if(sel.includes('Главное')){ env.modal='mainmenu'; env.menuState.mainMenu=0; }
+        }
+        return;
+      }
+
+      // ---- Pause menu ----
+      if(env.modal==='pause'){
+        if(keys['up']) env.menuState.pauseMenu=(env.menuState.pauseMenu-1+PAUSE_ITEMS.length)%PAUSE_ITEMS.length;
+        else if(keys['down']) env.menuState.pauseMenu=(env.menuState.pauseMenu+1)%PAUSE_ITEMS.length;
+        else if(keys['confirm']) executePauseItem();
+        else if(keys['cancel']) closePause();
+        return;
+      }
+
+      // ---- Inventory ----
+      if(env.modal==='inventory'){
+        if(keys['cancel']||keys['inventory']) closeModal();
+        else if(keys['up']||keys['left']) env.invSelection=Math.max(0,(env.invSelection||0)-1);
+        else if(keys['down']||keys['right']) env.invSelection=Math.min(Math.max(0,env.canvasButtons.length-1),(env.invSelection||0)+1);
+        else if(keys['confirm']){
+          var bSel = env.canvasButtons[env.invSelection||0];
+          if(bSel && bSel.action) bSel.action();
+        }
+        return;
+      }
+
+      // ---- Normal gameplay ----
+      if(keys['cancel']) {
+        if(env.player && env.player.bowAiming){ env.player.bowAiming=false; env.addLog('Прицел отменён','info'); }
+        else openPause();
+      }
+      else if(keys['shoot']) tryShoot();
+      else if(keys['confirm']) tryInteractOrAttack();
+      else if(keys['inventory']) openInventory();
+      else if(e.code==='Digit1') quickEquipWeapon('sword');
+      else if(e.code==='Digit2') quickEquipWeapon('bow');
+      else if(e.code==='Digit3') quickEquipWeapon('staff');
+      else if(e.code==='Digit4') quickUsePotion();
+      else if (e.code==='Digit0') freeCameraMode = !freeCameraMode;
+      
+    });
+
+    window.addEventListener('keyup',function(e){
+      updateKeyStates(e, false);
+    });
+
+    // Click on canvas for inventory buttons OR bow aim shoot
+    canvas.addEventListener('mousedown',function(e){
+      e.preventDefault();
+      if(env.modal==='inventory'){
+        var p=getCanvasPoint(canvas, e.clientX,e.clientY);
+        for(var i=0;i<env.canvasButtons.length;i++){
+          var b=env.canvasButtons[i];
+          if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h){
+            b.action();
+            return;
+          }
+        }
+      }
+      // Right click or any click while aiming: shoot
+      if(env.player && env.player.isRangedWeapon() && !env.modal){
+        env.player.enterAim();      
+        var point = getMapPointFromClick(e);
+        env.player.bowAimMouse(point.x, point.y);
+        env.player.rangedShoot();
+      }
+    });
+
+    // Mouse move: update bow aim angle
+    canvas.addEventListener('mousemove', function(e){
+      if(!env.player || !env.player.bowAiming) return;
+      var point = getMapPointFromClick(e);
+      env.player.bowAimMouse(point.x, point.y);
+    });
+
+    canvas.addEventListener('wheel',function(e){
+      e.preventDefault();
+      env.cfg.zoom=Math.max(0.5,Math.min(3.0,env.cfg.zoom+(e.deltaY>0?-0.1:0.1)));
+    },{passive:false});
+
+    canvas.addEventListener('contextmenu',function(e){e.preventDefault();});
+  }
+
+  function executePauseItem(){
+    var item=PAUSE_ITEMS[env.menuState.pauseMenu];
+    if(item==='ПРОДОЛЖИТЬ') closePause();
+    else if(item==='НОВЫЙ ЭТАЖ'){ closePause(); generate(); }
+    else if(item==='РЕСТАРТ'){ closePause(); restart(); }
+    else if(item==='ГЛАВНОЕ МЕНЮ'){ env.modal='mainmenu'; env.menuState.mainMenu=0; }
+  }
+
+  // ---- Public API ----
+  env.generate = generate;
+  env.restart  = restart;
+  env.newGame  = newGame;
+
+  // ---- Init ----
+  function initResources(onReady){
+    var awaitNum=0;
+    var sTypes=Object.keys(SPRITES);
+    var onLoadResource=function(){awaitNum--;if(awaitNum<=0)onReady();};
+    for(var i=0;i<sTypes.length;i++){
+      var sprite=SPRITES[sTypes[i]];
+      if(typeof sprite.imgSrc==='undefined'||!sprite) continue;
+      awaitNum++;
+      sprite.img=document.createElement('IMG');
+      sprite.img.src='data/sprites/'+sprite.imgSrc;
+      sprite.img.onload=onLoadResource;
+      sprite.img.onerror=onLoadResource;
+    }
+    awaitNum++;
+    SpritePlayer.importJSONAnim(playerAnim,function(animObject){
+      env.PLAYER_TPL.animObject=animObject;
+      env.PLAYER_TPL.animController=SpritePlayer(env.PLAYER_TPL.animObject.project,'idle',env.PLAYER_TPL.animObject.images);
+      onLoadResource();
+    });   
+    awaitNum++;
+    SpritePlayer.importJSONAnim(playerAnim_bow,function(animObject){
+      env.PLAYER_TPL.animBowObject=animObject;
+      env.PLAYER_TPL.animBowController=SpritePlayer(env.PLAYER_TPL.animBowObject.project,'prepare',env.PLAYER_TPL.animBowObject.images);
+      onLoadResource();
+    });
+    awaitNum++;
+    SpritePlayer.importJSONAnim(fairyAnim,function(animObject){
+      env.FAIRY_TPL.animObject=animObject;
+      env.FAIRY_TPL.animController=SpritePlayer(env.FAIRY_TPL.animObject.project,'idle',env.FAIRY_TPL.animObject.images);
+      onLoadResource();
+    });
+    
+  }
+
+  initResources(function(){
+    console.log('ready');
+    gameUI = new GameUI(env, ctx, canvas);
+    resize();
+    bindEvents();
+    // Start at main menu, don't generate yet
+    console.log(env.modalTimer);
+    lastTime=performance.now();
+    requestAnimationFrame(loop);
+  });
+
+  return env;
+
+})();
+</script>
+</body>
+</html>

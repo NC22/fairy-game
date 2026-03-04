@@ -1,0 +1,1537 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Sprite Animator</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --bg:      #0e0e16;
+  --panel:   #151520;
+  --border:  #2a2a3e;
+  --accent:  #c8a84b;
+  --accent2: #5a8fc8;
+  --danger:  #c85a5a;
+  --ok:      #5ac87a;
+  --text:    #ddd;
+  --muted:   #666;
+  --tile0:   #111118;
+  --tile1:   #14141e;
+}
+body { background:var(--bg); color:var(--text); font-family:'Courier New',monospace; font-size:12px; height:100vh; overflow:hidden; display:flex; flex-direction:column; }
+
+/* TOP BAR */
+#topbar { display:flex; align-items:center; gap:8px; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--border); flex-shrink:0; flex-wrap:wrap; }
+#topbar h1 { font-size:13px; color:var(--accent); letter-spacing:2px; margin-right:4px; }
+.sep { width:1px; height:18px; background:var(--border); margin:0 4px; }
+button { padding:3px 9px; font-family:'Courier New',monospace; font-size:11px; cursor:pointer; border:1px solid var(--border); border-radius:2px; background:var(--panel); color:var(--text); transition:border-color .15s, background .15s; }
+button:hover { border-color:var(--accent); background:#1e1e2e; }
+button.active { border-color:var(--accent); color:var(--accent); }
+button.ok  { border-color:var(--ok);  color:var(--ok);  }
+button.bad { border-color:var(--danger); color:var(--danger); }
+input[type=number], input[type=text], select {
+  padding:2px 5px; font-family:'Courier New',monospace; font-size:11px;
+  background:#0a0a12; border:1px solid var(--border); color:var(--text); border-radius:2px;
+}
+input[type=number] { width:52px; }
+label { font-size:11px; color:var(--muted); }
+
+/* MAIN LAYOUT */
+#main { display:flex; flex:1; overflow:hidden; }
+
+/* LEFT PANEL — parts list */
+#left { width:180px; flex-shrink:0; background:var(--panel); border-right:1px solid var(--border); display:flex; flex-direction:column; }
+#left h2, #right h2, #bottom-head { font-size:10px; color:var(--muted); letter-spacing:1px; padding:5px 8px; border-bottom:1px solid var(--border); text-transform:uppercase; }
+#parts-list { flex:1; overflow-y:auto; }
+.part-item { display:flex; align-items:center; gap:5px; padding:4px 8px; cursor:pointer; border-bottom:1px solid #11111a; transition:background .1s; }
+.part-item:hover { background:#1a1a28; }
+.part-item.selected { background:#1e1e30; border-left:2px solid var(--accent); }
+.part-item .pname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.part-item .pz { color:var(--muted); font-size:10px; }
+.part-item .phide { color:var(--muted); font-size:10px; cursor:pointer; }
+.part-item .phide:hover { color:var(--accent); }
+/* indent for children */
+.part-item .pindent { display:inline-block; color:var(--accent2); font-size:10px; flex-shrink:0; }
+#left-btns { display:flex; gap:4px; padding:6px; border-top:1px solid var(--border); }
+#left-btns button { flex:1; font-size:10px; padding:3px 4px; }
+
+/* CENTER — canvas */
+#center { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+#canvas-wrap { flex:1; position:relative; overflow:hidden; cursor:crosshair; }
+canvas#preview { display:block; width:100%; height:100%; }
+#center-toolbar { display:flex; gap:6px; padding:4px 8px; background:var(--panel); border-bottom:1px solid var(--border); align-items:center; flex-wrap:wrap; }
+
+/* RIGHT PANEL — part properties at current frame */
+#right { width:210px; flex-shrink:0; background:var(--panel); border-left:1px solid var(--border); display:flex; flex-direction:column; overflow-y:auto; }
+#right h2 { position:sticky; top:0; background:var(--panel); z-index:2; }
+.prop-row { display:flex; align-items:center; gap:4px; padding:3px 8px; border-bottom:1px solid #11111a; }
+.prop-row label { width:64px; flex-shrink:0; font-size:10px; }
+.prop-row input[type=number] { flex:1; width:auto; }
+.prop-row input[type=checkbox] { cursor:pointer; }
+.prop-row select { flex:1; width:auto; font-size:10px; }
+.prop-section { padding:5px 8px 2px; font-size:10px; color:var(--accent); letter-spacing:1px; border-bottom:1px solid var(--border); }
+
+/* BOTTOM — timeline */
+#bottom { height:140px; flex-shrink:0; background:var(--panel); border-top:1px solid var(--border); display:flex; flex-direction:column; }
+#timeline-head { display:flex; align-items:center; gap:6px; padding:4px 8px; border-bottom:1px solid var(--border); }
+#timeline-scroll { flex:1; overflow:auto; position:relative; }
+canvas#timeline { display:block; }
+
+#file-input { display:none; }
+#anim-select { width:110px; }
+#playhead-line { position:absolute; top:0; bottom:0; width:1px; background:var(--accent); pointer-events:none; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>⚡ SPRITE ANIM</h1>
+  <div class="sep"></div>
+  <label>Анимация:</label>
+  <select id="anim-select" onchange="App.selectAnim(this.value)"></select>
+  <button onclick="App.newAnim()">+ Анимация</button>
+  <button onclick="App.renameAnim()" class="bad" id="btn-del-anim">✎</button>
+  <button onclick="App.deleteAnim()" class="bad">✕</button>
+  <div class="sep"></div>
+  <label>FPS:</label>
+  <input type="number" id="inp-fps" value="12" min="1" max="60" style="width:40px" onchange="App.setFps(this.value)">
+  <label>Длина(кадр):</label>
+  <input type="number" id="inp-dur" value="24" min="1" max="9999" style="width:50px" onchange="App.setDur(this.value)">
+  <div class="sep"></div>
+  <button onclick="App.play()" id="btn-play">▶ Играть</button>
+  <button onclick="App.stop()">⏹</button>
+  <label>Кадр:</label>
+  <input type="number" id="inp-frame" value="0" min="0" style="width:50px" onchange="App.seekTo(+this.value)">
+  <div class="sep"></div>
+  <button class="ok" onclick="App.exportJSON()">💾 Экспорт JSON</button>
+  <button onclick="App.importJSON()">📂 Импорт JSON</button>
+  <input type="file" id="file-input-json" accept=".json" onchange="App.onImportJSON(this)">
+  <input type="file" id="file-input-img" accept="image/png,image/gif,image/webp" multiple onchange="App.onAddParts(this)">
+</div>
+
+<div id="main">
+  <!-- LEFT: parts -->
+  <div id="left">
+    <h2>Части персонажа</h2>
+    <div id="parts-list"></div>
+    <div id="left-btns">
+      <button onclick="App.addPartFile()">+ PNG</button>
+      <button onclick="App.deletePart()" class="bad">✕ Часть</button>
+    </div>
+  </div>
+
+  <!-- CENTER: preview canvas + center toolbar -->
+  <div id="center">
+    <div id="center-toolbar">
+      <label>Режим:</label>
+      <button id="btn-mode-select" class="active" onclick="App.setMode('select')">↖ Выбор</button>
+      <button id="btn-mode-move"   onclick="App.setMode('move')">✥ Двигать</button>
+      <button id="btn-mode-rot"    onclick="App.setMode('rot')">↻ Поворот</button>
+      <button id="btn-mode-scale"  onclick="App.setMode('scale')">⤡ Масштаб</button>
+      <button id="btn-mode-scale2" onclick="App.setMode('scale2')">⇱ Масштаб 2</button>
+      <div class="sep"></div>
+      <label>Зум:</label>
+      <input type="range" min="0.2" max="4" step="0.05" value="1" style="width:70px" oninput="App.setZoom(+this.value)">
+      <div class="sep"></div>
+      <button onclick="App.addKeyframe()">🔑 Ключ</button>
+      <button onclick="App.deleteKeyframe()" class="bad">✕ Ключ</button>
+      <div class="sep"></div>
+      <label>Сетка:</label>
+      <input type="checkbox" id="chk-grid" checked onchange="App.render()">
+      <label>Луковица:</label>
+      <input type="checkbox" id="chk-onion" onchange="App.render()">
+    </div>
+    <div id="canvas-wrap">
+      <canvas id="preview"></canvas>
+    </div>
+  </div>
+
+  <!-- RIGHT: properties -->
+  <div id="right">
+    <h2>Свойства (кадр <span id="rframe">0</span>)</h2>
+    <div id="props-panel">
+      <div style="padding:10px 8px; color:var(--muted);">Выберите часть</div>
+    </div>
+  </div>
+</div>
+
+<!-- BOTTOM: timeline -->
+<div id="bottom">
+  <div id="timeline-head">
+    <label>Таймлайн:</label>
+    <button onclick="App.addKeyframe()">🔑 Ключ здесь</button>
+    <button onclick="App.deleteKeyframe()" class="bad">✕ Ключ</button>
+    <div class="sep"></div>
+    <label style="margin-left:auto; color:var(--muted)" id="lbl-frame">0 / 24</label>
+  </div>
+  <div id="timeline-scroll">
+    <canvas id="timeline"></canvas>
+  </div>
+</div>
+
+<script src="lerp.js"></script>
+<script>
+
+// =============================================================================
+//  SPRITE ANIMATOR
+// =============================================================================
+
+var App = (function()
+{
+    var cvs  = document.getElementById('preview');
+    var ctx  = cvs.getContext('2d');
+    var tcvs = document.getElementById('timeline');
+    var tctx = tcvs.getContext('2d');
+
+    var project = { anims: {}, partBank: {} };
+    var currentAnim = null;
+    var currentFrame = 0;
+    var selectedPart = null;
+    var playing  = false;
+    var playTimer = null;
+    var zoom = 1.0;
+    var camX = 0, camY = 0;
+    var mode = 'select';
+    var images = {};
+
+    var drag = { active:false, startX:0, startY:0, startVal:null };
+    var tlDrag = false;
+
+    var LAST_ACTIONS_MAX = 400;
+    var lastActions = [];
+    var copyFrame = null;
+
+    function defaultState() {
+        return { x:0, y:0, rot:0, sx:1, sy:1, hidden:false, z:0, easing:DEFAULT_EASING };
+    }
+
+    function getKeys(part) { return part.keys || (part.keys = {}); }
+
+    function keyframes(part) {
+        return Object.keys(getKeys(part)).map(Number).sort(function(a,b){ return a-b; });
+    }
+
+    // ─── Local (relative) state at frame f ───────────────────────────────────
+    function localStateAt(part, f) {
+        var kf = getKeys(part);
+        var frames = keyframes(part);
+        if (frames.length === 0) return defaultState();
+        // exact keyframe must win (important for step-like props such as hidden/z)
+        if (kf[f]) return Object.assign({}, kf[f]);
+        if (frames.length === 1 || f <= frames[0]) return Object.assign({}, kf[frames[0]]);
+        if (f >= frames[frames.length-1]) return Object.assign({}, kf[frames[frames.length-1]]);
+
+        var lo, hi;
+        for (var i = 0; i < frames.length-1; i++) {
+            if (frames[i] <= f && frames[i+1] >= f) { lo = frames[i]; hi = frames[i+1]; break; }
+        }
+        var t = (f - lo) / (hi - lo);
+        var a = kf[lo], b = kf[hi];
+        // easing from the FROM keyframe
+        var eas = a.easing || DEFAULT_EASING;
+        return {
+            x      : lerpEased(a.x, b.x, t, eas),
+            y      : lerpEased(a.y, b.y, t, eas),
+            rot    : lerpAngleEased(a.rot, b.rot, t, eas),
+            sx     : lerpEased(a.sx, b.sx, t, eas),
+            sy     : lerpEased(a.sy, b.sy, t, eas),
+            hidden : a.hidden,
+            z      : a.z,
+            easing : eas
+        };
+    }
+
+    // ─── World (absolute) transform at frame f ───────────────────────────────
+    // Returns {x, y, rot, sx, sy, hidden, z}
+    function worldStateAt(part, f) {
+        var local = localStateAt(part, f);
+        if (!part.parent) return local;
+
+        var parentPart = getPart(part.parent);
+        if (!parentPart) return local;
+
+        // recursively get parent world state
+        var pw = worldStateAt(parentPart, f);
+        if (pw.hidden) {
+            // if parent is hidden, child is hidden too
+            var result = Object.assign({}, local);
+            result.hidden = true;
+            return result;
+        }
+
+        // compose transforms: parent world * local
+        // parent: translate(px,py) rotate(prot) scale(psx,psy)
+        // child local is in parent's local space
+        var prad = pw.rot * Math.PI / 180;
+        var cos = Math.cos(prad);
+        var sin = Math.sin(prad);
+
+        // rotate & scale child offset by parent
+        var wx = pw.x + (local.x * pw.sx) * cos - (local.y * pw.sy) * sin;
+        var wy = pw.y + (local.x * pw.sx) * sin + (local.y * pw.sy) * cos;
+
+        return {
+            x      : wx,
+            y      : wy,
+            rot    : pw.rot + local.rot,
+            sx     : pw.sx  * local.sx,
+            sy     : pw.sy  * local.sy,
+            hidden : local.hidden,
+            z      : local.z,
+            easing : local.easing
+        };
+    }
+
+    // stateAt now returns world state (used for rendering & hit-test)
+    function stateAt(part, f) {
+        return worldStateAt(part, f);
+    }
+
+    function anim() { return project.anims[currentAnim]; }
+
+    function idlePartFirstKey(partId) {
+        var idle = project.anims.idle;
+        if (!idle || !idle.parts) return null;
+        for (var i = 0; i < idle.parts.length; i++) {
+            var idlePart = idle.parts[i];
+            if (idlePart.id !== partId) continue;
+            var frames = keyframes(idlePart);
+            if (!frames.length) return null;
+            var firstFrame = frames[0];
+            return {
+                frame: firstFrame,
+                state: Object.assign({}, getKeys(idlePart)[firstFrame])
+            };
+        }
+        return null;
+    }
+
+    function sorted_parts() {
+        if (!anim()) return [];
+        return anim().parts.slice().sort(function(a,b){
+            var za = stateAt(a, currentFrame).z;
+            var zb = stateAt(b, currentFrame).z;
+            return za - zb;
+        });
+    }
+
+    function uid() { return '_' + Math.random().toString(36).slice(2,8); }
+
+
+    function ensurePartBank() {
+        if (!project.partBank || typeof project.partBank !== 'object') project.partBank = {};
+        return project.partBank;
+    }
+
+    function setPartSrc(partId, src) {
+        if (!partId) return;
+        ensurePartBank()[partId] = src || '';
+    }
+
+    function getPartSrc(part) {
+        var bank = ensurePartBank();
+        if (bank[part.id]) return bank[part.id];
+        return part.src || '';
+    }
+
+    // ==========================================================================
+    //  RENDER
+    // ==========================================================================
+
+    function render() {
+        resizeCvs();
+        var W = cvs.width, H = cvs.height;
+        ctx.clearRect(0,0,W,H);
+
+        if (document.getElementById('chk-grid').checked) drawGrid(ctx, W, H);
+
+        ctx.save();
+        ctx.translate(W/2 + camX, H/2 + camY);
+        ctx.scale(zoom, zoom);
+
+        // origin cross
+        ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        ctx.lineWidth = 1 / zoom;
+        ctx.beginPath(); ctx.moveTo(-40,0); ctx.lineTo(40,0); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0,-40); ctx.lineTo(0,40); ctx.stroke();
+
+        // onion skin
+        if (document.getElementById('chk-onion').checked && currentFrame > 0) {
+            ctx.globalAlpha = 0.18;
+            drawFrame(ctx, currentFrame - 1);
+            ctx.globalAlpha = 1.0;
+        }
+
+        drawFrame(ctx, currentFrame);
+
+        // draw parent->child bones
+        drawBones(ctx, currentFrame);
+
+        // selection highlight
+        if (selectedPart) {
+            var part = getPart(selectedPart);
+            if (part) {
+                var s = stateAt(part, currentFrame);
+                if (!s.hidden) {
+                    var img = images[part.id];
+                    var iw = img ? img.width : 32;
+                    var ih = img ? img.height : 32;
+                    ctx.save();
+                    ctx.translate(s.x, s.y);
+                    ctx.rotate(s.rot * Math.PI / 180);
+                    ctx.scale(s.sx, s.sy);
+                    ctx.strokeStyle = '#c8a84b';
+                    ctx.lineWidth   = 2 / zoom;
+                    ctx.setLineDash([4/zoom, 3/zoom]);
+                    ctx.strokeRect(-iw/2, -ih/2, iw, ih);
+                    ctx.setLineDash([]);
+                    ctx.restore();
+                }
+            }
+        }
+
+        ctx.restore();
+        renderTimeline();
+        updatePropsPanel();
+        document.getElementById('rframe').textContent = currentFrame;
+        document.getElementById('inp-frame').value = currentFrame;
+        document.getElementById('lbl-frame').textContent = currentFrame + ' / ' + (anim() ? anim().duration-1 : 0);
+    }
+
+    function drawFrame(ctx2, f) {
+        if (!anim()) return;
+        var parts = sorted_parts();
+        for (var i = 0; i < parts.length; i++) {
+            var part = parts[i];
+            var s = stateAt(part, f);
+            if (s.hidden) continue;
+            var img = images[part.id];
+            if (!img) continue;
+            ctx2.save();
+            ctx2.translate(s.x, s.y);
+            ctx2.rotate(s.rot * Math.PI / 180);
+            ctx2.scale(s.sx, s.sy);
+            ctx2.drawImage(img, -img.width/2, -img.height/2);
+            ctx2.restore();
+        }
+    }
+
+    // Draw faint lines from parent pivot to child pivot
+    function drawBones(ctx2, f) {
+        if (!anim()) return;
+        ctx2.save();
+        ctx2.strokeStyle = 'rgba(90,143,200,0.35)';
+        ctx2.lineWidth = 1 / zoom;
+        ctx2.setLineDash([3/zoom, 3/zoom]);
+        var parts = anim().parts;
+        for (var i = 0; i < parts.length; i++) {
+            var part = parts[i];
+            if (!part.parent) continue;
+            var parentPart = getPart(part.parent);
+            if (!parentPart) continue;
+            var cs = stateAt(part, f);
+            var ps = stateAt(parentPart, f);
+            ctx2.beginPath();
+            ctx2.moveTo(ps.x, ps.y);
+            ctx2.lineTo(cs.x, cs.y);
+            ctx2.stroke();
+            // small dot at parent pivot
+            ctx2.fillStyle = 'rgba(90,143,200,0.6)';
+            ctx2.beginPath();
+            ctx2.arc(ps.x, ps.y, 3/zoom, 0, Math.PI*2);
+            ctx2.fill();
+        }
+        ctx2.setLineDash([]);
+        ctx2.restore();
+    }
+
+    function drawGrid(ctx2, W, H) {
+        var step = 20 * zoom;
+        var ox = (W/2 + camX) % step;
+        var oy = (H/2 + camY) % step;
+        ctx2.strokeStyle = 'rgba(255,255,255,0.03)';
+        ctx2.lineWidth = 1;
+        for (var x = ox; x < W; x += step) { ctx2.beginPath(); ctx2.moveTo(x,0); ctx2.lineTo(x,H); ctx2.stroke(); }
+        for (var y = oy; y < H; y += step) { ctx2.beginPath(); ctx2.moveTo(0,y); ctx2.lineTo(W,y); ctx2.stroke(); }
+        ctx2.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx2.beginPath(); ctx2.moveTo(W/2+camX,0); ctx2.lineTo(W/2+camX,H); ctx2.stroke();
+        ctx2.beginPath(); ctx2.moveTo(0,H/2+camY); ctx2.lineTo(W,H/2+camY); ctx2.stroke();
+    }
+
+    // ==========================================================================
+    //  TIMELINE
+    // ==========================================================================
+    var TL_ROW = 22;
+    var TL_LABEL = 100;
+    var TL_PX_PER_FRAME = 12;
+
+    function renderTimeline() {
+        if (!anim()) return;
+        var parts = anim().parts;
+        var dur   = anim().duration;
+        var W = TL_LABEL + dur * TL_PX_PER_FRAME + 40;
+        var H = (parts.length + 1) * TL_ROW + 2;
+        tcvs.width  = W;
+        tcvs.height = H;
+        tctx.clearRect(0,0,W,H);
+
+        // header
+        tctx.fillStyle = '#1a1a26';
+        tctx.fillRect(0,0,W,TL_ROW);
+        tctx.fillStyle = '#555';
+        tctx.font = '9px Courier New';
+        for (var f = 0; f <= dur; f += 4) {
+            var fx = TL_LABEL + f * TL_PX_PER_FRAME;
+            tctx.fillStyle = '#555';
+            tctx.fillText(f, fx + 1, TL_ROW - 7);
+            tctx.strokeStyle = '#222';
+            tctx.lineWidth = 1;
+            tctx.beginPath(); tctx.moveTo(fx, 0); tctx.lineTo(fx, H); tctx.stroke();
+        }
+
+        for (var pi = 0; pi < parts.length; pi++) {
+            var part = parts[pi];
+            var ry = (pi + 1) * TL_ROW;
+            tctx.fillStyle = (part.id === selectedPart) ? '#1c1c2c' : '#161620';
+            tctx.fillRect(0, ry, W, TL_ROW);
+
+            // label (indent if has parent)
+            var indent = part.parent ? '  ∟ ' : '';
+            tctx.fillStyle = (part.id === selectedPart) ? '#c8a84b' : '#888';
+            tctx.font = '10px Courier New';
+            tctx.fillText(indent + part.name.slice(0,11), 4, ry + TL_ROW * 0.65);
+
+            // frame strip
+            tctx.fillStyle = '#1e1e2e';
+            tctx.fillRect(TL_LABEL, ry+2, dur*TL_PX_PER_FRAME, TL_ROW-4);
+
+            // tween lines
+            var kframes = keyframes(part);
+            if (kframes.length > 1) {
+                tctx.strokeStyle = '#3a3a5a';
+                tctx.lineWidth = 1;
+                tctx.setLineDash([2,2]);
+                tctx.beginPath();
+                tctx.moveTo(TL_LABEL + kframes[0]*TL_PX_PER_FRAME+TL_PX_PER_FRAME/2, ry+TL_ROW/2);
+                for (var ki2 = 1; ki2 < kframes.length; ki2++) {
+                    tctx.lineTo(TL_LABEL + kframes[ki2]*TL_PX_PER_FRAME+TL_PX_PER_FRAME/2, ry+TL_ROW/2);
+                }
+                tctx.stroke();
+                tctx.setLineDash([]);
+            }
+
+            // keyframe diamonds — colour based on easing
+            var kf = getKeys(part);
+            for (var ki = 0; ki < kframes.length; ki++) {
+                var kfData = kf[kframes[ki]];
+                var eas = kfData ? (kfData.easing || DEFAULT_EASING) : DEFAULT_EASING;
+                var kx = TL_LABEL + kframes[ki] * TL_PX_PER_FRAME + TL_PX_PER_FRAME/2;
+                var ky = ry + TL_ROW/2;
+                // color hint: linear=blue, elastic/bounce=green, others=gold
+                var col = '#c8a84b';
+                if (eas === 'linear') col = '#5a8fc8';
+                else if (eas === 'step') col = '#c85a5a';
+                else if (eas === 'easeOutElastic' || eas === 'easeOutBounce') col = '#5ac87a';
+                tctx.fillStyle = col;
+                tctx.beginPath();
+                tctx.moveTo(kx, ky-5); tctx.lineTo(kx+5, ky); tctx.lineTo(kx, ky+5); tctx.lineTo(kx-5, ky); tctx.closePath();
+                tctx.fill();
+            }
+
+            tctx.strokeStyle = '#11111a';
+            tctx.lineWidth = 1;
+            tctx.beginPath(); tctx.moveTo(0, ry); tctx.lineTo(W, ry); tctx.stroke();
+        }
+
+        // playhead
+        var phx = TL_LABEL + currentFrame * TL_PX_PER_FRAME + TL_PX_PER_FRAME/2;
+        tctx.strokeStyle = '#c8a84b';
+        tctx.lineWidth = 2;
+        tctx.beginPath(); tctx.moveTo(phx, 0); tctx.lineTo(phx, H); tctx.stroke();
+        tctx.fillStyle = '#c8a84b';
+        tctx.beginPath(); tctx.moveTo(phx-5,0); tctx.lineTo(phx+5,0); tctx.lineTo(phx,8); tctx.closePath(); tctx.fill();
+    }
+
+    // ==========================================================================
+    //  PROPERTIES PANEL
+    // ==========================================================================
+
+    function buildEasingOptions(selected) {
+        var html = '';
+        var keys = Object.keys(EASINGS);
+        for (var i = 0; i < keys.length; i++) {
+            html += '<option value="' + keys[i] + '"' + (keys[i] === selected ? ' selected' : '') + '>' + keys[i] + '</option>';
+        }
+        return html;
+    }
+
+    function buildParentOptions(currentPartId, selectedParentId) {
+        var html = '<option value="">— нет —</option>';
+        if (!anim()) return html;
+        var parts = anim().parts;
+        for (var i = 0; i < parts.length; i++) {
+            var p = parts[i];
+            if (p.id === currentPartId) continue;
+            // avoid circular: don't allow a child of this part to become its parent
+            if (isAncestor(currentPartId, p.id)) continue;
+            html += '<option value="' + p.id + '"' + (p.id === selectedParentId ? ' selected' : '') + '>' + p.name + '</option>';
+        }
+        return html;
+    }
+
+    // Returns true if candidateId is a descendant of partId (to prevent cycles)
+    function isAncestor(partId, candidateId) {
+        if (!anim()) return false;
+        var visited = {};
+        var cur = candidateId;
+        while (cur) {
+            if (visited[cur]) break;
+            visited[cur] = true;
+            var p = getPart(cur);
+            if (!p) break;
+            if (p.parent === partId) return true;
+            cur = p.parent;
+        }
+        return false;
+    }
+
+    function updatePropsPanel() {
+        var panel = document.getElementById('props-panel');
+        if (!selectedPart || !anim()) {
+            panel.innerHTML = '<div style="padding:10px 8px; color:var(--muted);">Выберите часть</div>';
+            return;
+        }
+        var part = getPart(selectedPart);
+        if (!part) return;
+        var s = localStateAt(part, currentFrame); // show LOCAL values for editing
+        var hasKey = getKeys(part)[currentFrame] !== undefined;
+        var curEasing = s.easing || DEFAULT_EASING;
+
+        panel.innerHTML =
+            '<div class="prop-section">' + part.name + '</div>' +
+            (hasKey
+                ? '<div class="prop-section" style="color:var(--ok)">🔑 Ключевой кадр</div>'
+                : '<div class="prop-section" style="color:var(--muted)">~ Интерполяция</div>') +
+
+            // Parent
+            '<div class="prop-section" style="color:var(--accent2)">Иерархия</div>' +
+            '<div class="prop-row"><label>Родитель:</label><select id="p-parent" onchange="App.setParent(this.value)">' + buildParentOptions(selectedPart, part.parent || '') + '</select></div>' +
+
+            // Transform (local)
+            '<div class="prop-section" style="color:var(--accent)">Локальная трансформация</div>' +
+            '<div class="prop-row"><label>X:</label><input type="number" id="p-x" value="' + s.x.toFixed(1) + '" step="1" onchange="App.setProp(\'x\',+this.value)"></div>' +
+            '<div class="prop-row"><label>Y:</label><input type="number" id="p-y" value="' + s.y.toFixed(1) + '" step="1" onchange="App.setProp(\'y\',+this.value)"></div>' +
+            '<div class="prop-row"><label>Угол°:</label><input type="number" id="p-rot" value="' + s.rot.toFixed(1) + '" step="1" onchange="App.setProp(\'rot\',+this.value)"></div>' +
+            '<div class="prop-row"><label>Масшт X:</label><input type="number" id="p-sx" value="' + s.sx.toFixed(2) + '" step="0.05" onchange="App.setProp(\'sx\',+this.value)"></div>' +
+            '<div class="prop-row"><label>Масшт Y:</label><input type="number" id="p-sy" value="' + s.sy.toFixed(2) + '" step="0.05" onchange="App.setProp(\'sy\',+this.value)"></div>' +
+            '<div class="prop-row"><label>Z-порядок:</label><input type="number" id="p-z" value="' + s.z + '" step="1" onchange="App.setProp(\'z\',+this.value)"></div>' +
+            '<div class="prop-row"><label>Скрыт:</label><input type="checkbox" id="p-hidden"' + (s.hidden ? ' checked' : '') + ' onchange="App.setProp(\'hidden\',this.checked)"></div>' +
+
+            // Easing
+            '<div class="prop-section" style="color:var(--accent)">Интерполяция (из этого кадра)</div>' +
+            '<div class="prop-row"><label>Easing:</label><select id="p-easing" onchange="App.setProp(\'easing\',this.value)">' + buildEasingOptions(curEasing) + '</select></div>' +
+
+            // Keyframe buttons
+            '<div class="prop-row" style="padding-top:6px"><button style="width:100%" onclick="App.addKeyframe()">🔑 Добавить ключ</button></div>' +
+            '<div class="prop-row"><button style="width:100%" class="bad" onclick="App.deleteKeyframe()">✕ Удалить ключ</button></div>';
+    }
+
+    function checkLastActions() {
+        if (lastActions.length > LAST_ACTIONS_MAX) {
+            while (lastActions.length > LAST_ACTIONS_MAX) lastActions.shift();
+        }
+    }
+
+    // ==========================================================================
+    //  DATA OPS
+    // ==========================================================================
+
+    function getPart(id) {
+        if (!anim()) return null;
+        for (var i = 0; i < anim().parts.length; i++)
+            if (anim().parts[i].id === id) return anim().parts[i];
+        return null;
+    }
+
+    function ensureKey(part, f) {
+        var kf = getKeys(part);
+        if (!kf[f]) {
+            kf[f] = Object.assign({}, localStateAt(part, f));
+            if (!kf[f].easing) kf[f].easing = DEFAULT_EASING;
+        }
+        return kf[f];
+    }
+
+    function setProp(prop, val, ctrlZ) {
+        if (!selectedPart || !anim()) return;
+        var part = getPart(selectedPart);
+        if (!part) return;
+        var key = ensureKey(part, currentFrame);
+
+        if (!ctrlZ) {
+            lastActions.push({ part: part, currentFrame: currentFrame, prop: prop, val: key[prop] });
+            checkLastActions();
+        }
+
+        key[prop] = val;
+        render();
+    }
+
+    function setParent(parentId) {
+        if (!selectedPart || !anim()) return;
+        var part = getPart(selectedPart);
+        if (!part) return;
+        part.parent = parentId || null;
+        render();
+    }
+
+    function addKeyframe() {
+        if (!selectedPart || !anim()) return;
+        var part = getPart(selectedPart);
+        if (!part) return;
+        ensureKey(part, currentFrame);
+        render();
+    }
+
+    function deleteKeyframe() {
+        if (!selectedPart || !anim()) return;
+        var part = getPart(selectedPart);
+        if (!part) return;
+        delete getKeys(part)[currentFrame];
+        render();
+    }
+
+    // ==========================================================================
+    //  PARTS LIST
+    // ==========================================================================
+
+    function refreshPartsList() {
+        var list = document.getElementById('parts-list');
+        list.innerHTML = '';
+        if (!anim()) return;
+        var parts = anim().parts;
+        for (var i = 0; i < parts.length; i++) {
+            var part = parts[i];
+            var s = localStateAt(part, currentFrame);
+            var div = document.createElement('div');
+            div.className = 'part-item' + (part.id === selectedPart ? ' selected' : '');
+            div.dataset.id = part.id;
+            var thumb = '';
+            if (images[part.id]) thumb = '<img src="' + images[part.id].src + '" style="width:20px;height:20px;object-fit:contain;border:1px solid #333;flex-shrink:0">';
+            var indent = part.parent ? '<span class="pindent">∟</span>' : '';
+            div.innerHTML = indent + thumb + '<span class="pname">' + part.name + '</span><span class="pz">z:' + s.z + '</span><span class="phide">' + (s.hidden ? '👁‍🗨' : '👁') + '</span>';
+            div.addEventListener('click', (function(id){ return function() { selectPart(id); }; })(part.id));
+            list.appendChild(div);
+        }
+    }
+
+    function selectPart(id) {
+        selectedPart = id;
+        refreshPartsList();
+        render();
+    }
+
+    // ==========================================================================
+    //  ANIM LIST
+    // ==========================================================================
+
+    function refreshAnimList() {
+        var sel = document.getElementById('anim-select');
+        sel.innerHTML = '';
+        var names = Object.keys(project.anims);
+        for (var i = 0; i < names.length; i++) {
+            var opt = document.createElement('option');
+            opt.value = opt.textContent = names[i];
+            if (names[i] === currentAnim) opt.selected = true;
+            sel.appendChild(opt);
+        }
+    }
+
+    function selectAnim(name) {
+        currentAnim = name;
+        currentFrame = 0;
+        selectedPart = null;
+        if (anim()) {
+            document.getElementById('inp-fps').value = anim().fps;
+            document.getElementById('inp-dur').value = anim().duration;
+        }
+        render();
+        refreshPartsList();
+    }
+
+    function newAnim() {
+        var name = prompt('Название анимации:', 'idle');
+        if (!name) return;
+        project.anims[name] = { fps:12, duration:24, parts:[] };
+        if (currentAnim && anim()) {
+            var src = anim().parts;
+            for (var i = 0; i < src.length; i++) {
+                var part = { id:src[i].id, name:src[i].name, src:src[i].src, parent:src[i].parent||null, keys:{} };
+                var idleKey = idlePartFirstKey(src[i].id);
+                if (idleKey) part.keys[idleKey.frame] = idleKey.state;
+                project.anims[name].parts.push(part);
+            }
+        }
+        currentAnim = name;
+        selectedPart = null;
+        currentFrame = 0;
+        refreshAnimList();
+        selectAnim(name);
+    }
+
+    function renameAnim() {
+        if (!currentAnim) return;
+        var name = prompt('Новое название:', currentAnim);
+        if (!name || name === currentAnim) return;
+        project.anims[name] = project.anims[currentAnim];
+        delete project.anims[currentAnim];
+        currentAnim = name;
+        refreshAnimList();
+        selectAnim(name);
+    }
+
+    function deleteAnim() {
+        if (!currentAnim) return;
+        if (!confirm('Удалить анимацию "' + currentAnim + '"?')) return;
+        delete project.anims[currentAnim];
+        var names = Object.keys(project.anims);
+        currentAnim = names[0] || null;
+        if (currentAnim) selectAnim(currentAnim);
+        else { selectedPart = null; currentFrame = 0; }
+        refreshAnimList();
+        render();
+        refreshPartsList();
+    }
+
+    // ==========================================================================
+    //  ADD / REMOVE PARTS
+    // ==========================================================================
+
+    function addPartFile() {
+        document.getElementById('file-input-img').click();
+    }
+
+    function onAddParts(input) {
+        if (!currentAnim) { alert('Сначала создайте анимацию'); return; }
+        var files = input.files;
+
+        function updatePartSrcById(partId, src) {
+            var animNames = Object.keys(project.anims);
+            for (var ai = 0; ai < animNames.length; ai++) {
+                var a = project.anims[animNames[ai]];
+                if (!a || !a.parts) continue;
+                for (var pi = 0; pi < a.parts.length; pi++) {
+                    if (a.parts[pi].id === partId) a.parts[pi].src = src;
+                }
+            }
+            setPartSrc(partId, src);
+        }
+
+        for (var i = 0; i < files.length; i++) {
+            (function(file) {
+                var partName = file.name.replace(/\.[^.]+$/,'');
+                if (!partName) { alert('Некорректное имя файла'); return; }
+                var parts = anim().parts;
+                var existIndex = null;
+                for (var j = 0; j < parts.length; j++) {
+                    if (parts[j].name.localeCompare(partName) === 0) { existIndex = j; break; }
+                }
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    var src = e.target.result;
+                    var id  = existIndex !== null ? parts[existIndex].id : uid();
+                    var img = new Image();
+                    img.onload = function() {
+                        images[id] = img;
+                        if (existIndex === null) {
+                            var part = { id:id, name:partName, src:src, parent:null, keys:{} };
+                            part.keys[0] = defaultState();
+                            anim().parts.push(part);
+                            setPartSrc(id, src);
+                        } else {
+                            updatePartSrcById(id, src);
+                        }
+                        refreshPartsList();
+                        selectPart(id);
+                    };
+                    img.src = src;
+                };
+                reader.readAsDataURL(file);
+            })(files[i]);
+        }
+        input.value = '';
+    }
+
+    function deletePart() {
+        if (!selectedPart || !anim()) return;
+        if (!confirm('Удалить часть?')) return;
+        // unparent children
+        var parts = anim().parts;
+        for (var i = 0; i < parts.length; i++) {
+            if (parts[i].parent === selectedPart) parts[i].parent = null;
+        }
+        anim().parts = anim().parts.filter(function(p){ return p.id !== selectedPart; });
+        delete images[selectedPart];
+        var names = Object.keys(project.anims);
+        for (var ni = 0; ni < names.length; ni++) {
+            project.anims[names[ni]].parts = project.anims[names[ni]].parts.filter(function(p){ return p.id !== selectedPart; });
+        }
+        delete ensurePartBank()[selectedPart];
+        selectedPart = null;
+        refreshPartsList();
+        render();
+    }
+
+    // ==========================================================================
+    //  PLAYBACK
+    // ==========================================================================
+
+    function play() {
+        if (!anim()) return;
+        playing = true;
+        document.getElementById('btn-play').textContent = '⏸';
+        document.getElementById('btn-play').onclick = function(){ stop(); };
+        var fps = anim().fps;
+        var dur = anim().duration;
+        clearInterval(playTimer);
+        playTimer = setInterval(function() {
+            currentFrame = (currentFrame + 1) % dur;
+            render();
+        }, 1000 / fps);
+    }
+
+    function stop() {
+        playing = false;
+        clearInterval(playTimer);
+        document.getElementById('btn-play').textContent = '▶ Играть';
+        document.getElementById('btn-play').onclick = function(){ play(); };
+        render();
+    }
+
+    function seekTo(f) {
+        if (!anim()) return;
+        currentFrame = Math.max(0, Math.min(anim().duration - 1, f));
+        render();
+    }
+
+    function setFps(v) {
+        if (!anim()) return;
+        anim().fps = Math.max(1, parseInt(v) || 12);
+        if (playing) { stop(); play(); }
+    }
+
+    function setDur(v) {
+        if (!anim()) return;
+        anim().duration = Math.max(1, parseInt(v) || 24);
+        if (currentFrame >= anim().duration) currentFrame = anim().duration - 1;
+        render();
+    }
+
+    // ==========================================================================
+    //  IMPORT / EXPORT
+    // ==========================================================================
+
+    function buildExportProject() {
+        var out = { anims: {}, partBank: {} };
+        var names = Object.keys(project.anims || {});
+        for (var ni = 0; ni < names.length; ni++) {
+            var name = names[ni];
+            var a = project.anims[name];
+            if (!a) continue;
+            out.anims[name] = { fps: a.fps, duration: a.duration, parts: [] };
+            var parts = a.parts || [];
+            for (var pi = 0; pi < parts.length; pi++) {
+                var part = parts[pi];
+                var src = getPartSrc(part);
+                if (src) out.partBank[part.id] = src;
+                out.anims[name].parts.push({
+                    id: part.id,
+                    name: part.name,
+                    parent: part.parent || null,
+                    keys: part.keys || {}
+                });
+            }
+        }
+        return out;
+    }
+
+    function normalizeImportedProject(data) {
+        var normalized = { anims: {}, partBank: {} };
+        if (!data || typeof data !== 'object') return normalized;
+
+        var srcAnims = data.anims || {};
+        var legacyBank = data.partBank || {};
+        var names = Object.keys(srcAnims);
+        for (var ni = 0; ni < names.length; ni++) {
+            var name = names[ni];
+            var a = srcAnims[name] || {};
+            var dstAnim = {
+                fps: Math.max(1, parseInt(a.fps, 10) || 12),
+                duration: Math.max(1, parseInt(a.duration, 10) || 24),
+                parts: []
+            };
+            var parts = a.parts || [];
+            for (var pi = 0; pi < parts.length; pi++) {
+                var p = parts[pi] || {};
+                if (!p.id) continue;
+                var src = legacyBank[p.id] || p.src || '';
+                if (src && !normalized.partBank[p.id]) normalized.partBank[p.id] = src;
+                dstAnim.parts.push({
+                    id: p.id,
+                    name: p.name || p.id,
+                    src: src,
+                    parent: p.parent || null,
+                    keys: p.keys || {}
+                });
+            }
+            normalized.anims[name] = dstAnim;
+        }
+        return normalized;
+    }
+
+    function exportJSON() {
+        var data = JSON.stringify(buildExportProject(), null, 2);
+        var blob = new Blob([data], { type:'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'animation.json';
+        a.click();
+    }
+
+    function importJSON() {
+        document.getElementById('file-input-json').click();
+    }
+
+    function onImportJSON(input) {
+        var file = input.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                var data = JSON.parse(e.target.result);
+                project = normalizeImportedProject(data);
+                images  = {};
+
+                var names = Object.keys(project.anims);
+                var partIds = Object.keys(project.partBank || {});
+                var pending = 0;
+
+                function finalizeImport() {
+                    currentAnim = names[0] || null;
+                    selectedPart = null;
+                    currentFrame = 0;
+                    refreshAnimList();
+                    if (currentAnim) selectAnim(currentAnim);
+                    render();
+                    refreshPartsList();
+                }
+
+                function tryDone() {
+                    if (--pending === 0) finalizeImport();
+                }
+
+                for (var pi = 0; pi < partIds.length; pi++) {
+                    var id = partIds[pi];
+                    var src = project.partBank[id];
+                    if (!src) continue;
+                    pending++;
+                    (function(partId, srcVal) {
+                        var img = new Image();
+                        img.onload = function() { images[partId] = img; tryDone(); };
+                        img.onerror = function() { tryDone(); };
+                        img.src = srcVal;
+                    })(id, src);
+                }
+
+                if (pending === 0) finalizeImport();
+            } catch(ex) {
+                alert('Ошибка загрузки: ' + ex.message);
+            }
+        };
+        reader.readAsText(file);
+        input.value = '';
+    }
+
+    // ==========================================================================
+    //  CANVAS INTERACTION
+    // ==========================================================================
+
+    function setMode(m) {
+        mode = m;
+        ['select','move','rot','scale','scale2'].forEach(function(n) {
+            var btn = document.getElementById('btn-mode-' + n);
+            if (btn) btn.classList.toggle('active', n === m);
+        });
+    }
+
+    function setZoom(v) { zoom = v; render(); }
+
+    function worldPos(e) {
+        var rect = cvs.getBoundingClientRect();
+        var sx = (e.clientX - rect.left) * (cvs.width  / rect.width);
+        var sy = (e.clientY - rect.top)  * (cvs.height / rect.height);
+        return {
+            x: (sx - cvs.width/2  - camX) / zoom,
+            y: (sy - cvs.height/2 - camY) / zoom
+        };
+    }
+
+    function hitTest(wx, wy) {
+        if (!anim()) return null;
+        var parts = sorted_parts().slice().reverse();
+        for (var i = 0; i < parts.length; i++) {
+            var part = parts[i];
+            var s = stateAt(part, currentFrame);  // world state for hit-test
+            if (s.hidden) continue;
+            var img = images[part.id];
+            if (!img) continue;
+            var dx = wx - s.x, dy = wy - s.y;
+            var rad = -s.rot * Math.PI / 180;
+            var lx = dx*Math.cos(rad) - dy*Math.sin(rad);
+            var ly = dx*Math.sin(rad) + dy*Math.cos(rad);
+            lx /= s.sx; ly /= s.sy;
+            var hw = img.width/2, hh = img.height/2;
+            if (lx >= -hw && lx <= hw && ly >= -hh && ly <= hh) return part.id;
+        }
+        return null;
+    }
+
+    function worldToParentLocal(part, wx, wy, f) {
+        if (!part || !part.parent) return { x:wx, y:wy };
+        var parentPart = getPart(part.parent);
+        var pw = parentPart ? worldStateAt(parentPart, f) : null;
+        if (!pw) return { x:wx, y:wy };
+        var dx = wx - pw.x;
+        var dy = wy - pw.y;
+        var rad = -pw.rot * Math.PI / 180;
+        var lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+        var ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+        return {
+            x: lx / pw.sx,
+            y: ly / pw.sy
+        };
+    }
+
+    function pickScale2Edge(part, wx, wy, f) {
+        var img = images[part.id];
+        if (!img) return null;
+        var s = stateAt(part, f);
+        var dx = wx - s.x;
+        var dy = wy - s.y;
+        var rad = -s.rot * Math.PI / 180;
+        var lx = dx * Math.cos(rad) - dy * Math.sin(rad);
+        var ly = dx * Math.sin(rad) + dy * Math.cos(rad);
+        lx /= s.sx;
+        ly /= s.sy;
+        var hw = img.width / 2;
+        var hh = img.height / 2;
+        if (lx < -hw || lx > hw || ly < -hh || ly > hh) return null;
+
+        var dLeft = Math.abs(lx + hw);
+        var dRight = Math.abs(hw - lx);
+        var dTop = Math.abs(ly + hh);
+        var dBottom = Math.abs(hh - ly);
+        var m = Math.min(dLeft, dRight, dTop, dBottom);
+        if (m === dLeft) return 'left';
+        if (m === dRight) return 'right';
+        if (m === dTop) return 'top';
+        return 'bottom';
+    }
+
+    function bindCanvasEvents() {
+        cvs.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            var wp = worldPos(e);
+            if (e.button === 1 || (e.button === 0 && e.altKey)) {
+                drag.active = true; drag.pan = true;
+                drag.startX = e.clientX; drag.startY = e.clientY;
+                drag.startVal = { x:camX, y:camY };
+                return;
+            }
+            if (e.button === 0) {
+                if (e.ctrlKey) {
+                    var ctrlHit = hitTest(wp.x, wp.y);
+                    if (ctrlHit) selectPart(ctrlHit);
+                    return;
+                }
+
+                if (mode === 'select') {
+                    var hit = hitTest(wp.x, wp.y);
+                    if (hit) selectPart(hit);
+                    else { selectedPart = null; refreshPartsList(); render(); }
+                    return;
+                }
+                if (!selectedPart) return;
+                var part = getPart(selectedPart);
+                if (!part) return;
+
+                var key = getKeys(part)[currentFrame];
+                if (key) {
+                    if (mode === 'move') {
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'x', val:key.x });
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'y', val:key.y });
+                        lastActions.push({ part:null, currentFrame:null, prop:'_multi', val:2 });
+                    } else if (mode === 'rot') {
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'rot', val:key.rot });
+                    } else if (mode === 'scale') {
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'sy', val:key.sy });
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'sx', val:key.sx });
+                        lastActions.push({ part:null, currentFrame:null, prop:'_multi', val:2 });
+                    } else if (mode === 'scale2') {
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'x',  val:key.x  });
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'y',  val:key.y  });
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'sy', val:key.sy });
+                        lastActions.push({ part:part, currentFrame:currentFrame, prop:'sx', val:key.sx });
+                        lastActions.push({ part:null, currentFrame:null, prop:'_multi', val:4 });
+                    }
+                    checkLastActions();
+                }
+
+                var s = localStateAt(part, currentFrame);
+                drag.active = true; drag.pan = false;
+                drag.startX = e.clientX; drag.startY = e.clientY;
+                drag.startVal = Object.assign({}, s);
+                ensureKey(part, currentFrame);
+
+                if (mode === 'scale2') {
+                    drag.scale2Edge = pickScale2Edge(part, wp.x, wp.y, currentFrame);
+                    drag.scale2Pointer = worldToParentLocal(part, wp.x, wp.y, currentFrame);
+                    if (!drag.scale2Edge) drag.active = false;
+                } else {
+                    drag.scale2Edge = null;
+                    drag.scale2Pointer = null;
+                }
+            }
+        });
+
+        cvs.addEventListener('mousemove', function(e) {
+            if (!drag.active) return;
+            var dx = e.clientX - drag.startX;
+            var dy = e.clientY - drag.startY;
+            if (drag.pan) {
+                camX = drag.startVal.x + dx;
+                camY = drag.startVal.y + dy;
+                render(); return;
+            }
+            if (!selectedPart) return;
+            var part = getPart(selectedPart);
+            if (!part) return;
+            var key = getKeys(part)[currentFrame];
+            if (!key) return;
+
+            if (mode === 'move') {
+                // drag in screen space; need to account for parent world transform
+                if (part.parent) {
+                    var parentPart = getPart(part.parent);
+                    var pw = parentPart ? worldStateAt(parentPart, currentFrame) : null;
+                    if (pw) {
+                        var prad = -pw.rot * Math.PI / 180;
+                        var cos = Math.cos(prad), sin = Math.sin(prad);
+                        var wdx = dx / zoom / pw.sx;
+                        var wdy = dy / zoom / pw.sy;
+                        // un-rotate
+                        key.x = drag.startVal.x + wdx*Math.cos(-prad) - wdy*Math.sin(-prad);
+                        key.y = drag.startVal.y + wdx*Math.sin(-prad) + wdy*Math.cos(-prad);
+                    } else {
+                        key.x = drag.startVal.x + dx / zoom;
+                        key.y = drag.startVal.y + dy / zoom;
+                    }
+                } else {
+                    key.x = drag.startVal.x + dx / zoom;
+                    key.y = drag.startVal.y + dy / zoom;
+                }
+            } else if (mode === 'rot') {
+                key.rot = drag.startVal.rot + dy * 0.3;
+            } else if (mode === 'scale') {
+                var factor = 1 + (dy * 0.3) / 100;
+                key.sx = Math.max(0.01, drag.startVal.sx * factor);
+                key.sy = Math.max(0.01, drag.startVal.sy * factor);
+            } else if (mode === 'scale2') {
+                if (!drag.scale2Edge || !drag.scale2Pointer) return;
+                var curWp = worldPos(e);
+                var startP = drag.scale2Pointer;
+                var curP = worldToParentLocal(part, curWp.x, curWp.y, currentFrame);
+                var deltaX = curP.x - startP.x;
+                var deltaY = curP.y - startP.y;
+                var img = images[part.id];
+                if (!img) return;
+
+                var rotRad = drag.startVal.rot * Math.PI / 180;
+                var axisX = { x: Math.cos(rotRad), y: Math.sin(rotRad) };
+                var axisY = { x: -Math.sin(rotRad), y: Math.cos(rotRad) };
+                var minScale = 0.01;
+                var deltaEdge;
+
+                if (drag.scale2Edge === 'left' || drag.scale2Edge === 'right') {
+                    deltaEdge = deltaX * axisX.x + deltaY * axisX.y;
+                    if (drag.scale2Edge === 'left') {
+                        key.sx = Math.max(minScale, drag.startVal.sx - (deltaEdge / img.width));
+                    } else {
+                        key.sx = Math.max(minScale, drag.startVal.sx + (deltaEdge / img.width));
+                    }
+                    key.x = drag.startVal.x + axisX.x * (deltaEdge / 2);
+                    key.y = drag.startVal.y + axisX.y * (deltaEdge / 2);
+                } else {
+                    deltaEdge = deltaX * axisY.x + deltaY * axisY.y;
+                    if (drag.scale2Edge === 'top') {
+                        key.sy = Math.max(minScale, drag.startVal.sy - (deltaEdge / img.height));
+                    } else {
+                        key.sy = Math.max(minScale, drag.startVal.sy + (deltaEdge / img.height));
+                    }
+                    key.x = drag.startVal.x + axisY.x * (deltaEdge / 2);
+                    key.y = drag.startVal.y + axisY.y * (deltaEdge / 2);
+                }
+            }
+
+            render();
+        });
+
+        window.addEventListener('mouseup', function() {
+            drag.active = false;
+            drag.scale2Edge = null;
+            drag.scale2Pointer = null;
+        });
+
+        cvs.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            zoom = Math.max(0.2, Math.min(4, zoom + (e.deltaY > 0 ? -0.07 : 0.07)));
+            render();
+        }, { passive:false });
+
+        cvs.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+    }
+
+    // ==========================================================================
+    //  TIMELINE INTERACTION
+    // ==========================================================================
+
+    function bindTimelineEvents() {
+        var scroll = document.getElementById('timeline-scroll');
+
+        function tlClick(e) {
+            if (!anim()) return;
+            var rect = tcvs.getBoundingClientRect();
+            var scrollX = scroll.scrollLeft;
+            var rawX = (e.clientX - rect.left) * (tcvs.width / rect.width) + scrollX;
+            var rawY = (e.clientY - rect.top)  * (tcvs.height / rect.height);
+            var row = Math.floor(rawY / TL_ROW) - 1;
+            if (row >= 0 && row < anim().parts.length) selectPart(anim().parts[row].id);
+            var f = Math.floor((rawX - TL_LABEL) / TL_PX_PER_FRAME);
+            f = Math.max(0, Math.min(anim().duration - 1, f));
+            currentFrame = f;
+            render();
+        }
+
+        tcvs.addEventListener('mousedown', function(e) { tlDrag = true; tlClick(e); });
+        tcvs.addEventListener('mousemove', function(e) { if (tlDrag) tlClick(e); });
+        window.addEventListener('mouseup',  function()  { tlDrag = false; });
+    }
+
+    // ==========================================================================
+    //  RESIZE
+    // ==========================================================================
+
+    function resizeCvs() {
+        var wrap = document.getElementById('canvas-wrap');
+        if (cvs.width !== wrap.clientWidth || cvs.height !== wrap.clientHeight) {
+            cvs.width  = wrap.clientWidth;
+            cvs.height = wrap.clientHeight;
+        }
+    }
+
+    // ==========================================================================
+    //  INIT
+    // ==========================================================================
+
+    function init() {
+        resizeCvs();
+        bindCanvasEvents();
+        bindTimelineEvents();
+
+        project.anims['idle'] = { fps:12, duration:24, parts:[] };
+        currentAnim = 'idle';
+        refreshAnimList();
+        selectAnim('idle');
+        render();
+
+        window.addEventListener('resize', function() { render(); });
+
+        window.addEventListener('keydown', function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+            if (e.ctrlKey && e.keyCode === 90) {
+                if (lastActions.length > 0) {
+                    var action = lastActions.pop();
+                    if (action.prop === '_multi') {
+                        var maxA = action.val;
+                        for (var i = 0; i < maxA; i++) {
+                            action = lastActions.pop();
+                            if (action) setProp(action.prop, action.val, true);
+                        }
+                    } else {
+                        setProp(action.prop, action.val, true);
+                    }
+                }
+            }
+
+            if (e.ctrlKey && e.keyCode === 67) { copyFrame = currentFrame; }
+
+            if (e.ctrlKey && e.keyCode === 86) {
+                if (copyFrame !== null) {
+                    if (!selectedPart || !anim()) return;
+                    var part = getPart(selectedPart);
+                    if (!part) return;
+                    var key = getKeys(part)[copyFrame];
+                    if (!key) return;
+                    var kf = getKeys(part);
+                    kf[currentFrame] = Object.assign({}, localStateAt(part, copyFrame));
+                    render();
+                }
+            }
+
+            if (e.key === ' ') { e.preventDefault(); playing ? stop() : play(); }
+            if (e.key === 'ArrowRight') { stop(); seekTo(currentFrame + 1); }
+            if (e.key === 'ArrowLeft')  { stop(); seekTo(currentFrame - 1); }
+            if (e.key === 'k' || e.key === 'K') addKeyframe();
+            if (e.key === 'm' || e.key === 'M') setMode('move');
+            if (e.key === 'r' || e.key === 'R') setMode('rot');
+            if (e.key === 's' || e.key === 'S') setMode('scale');
+            if (e.key === 'a' || e.key === 'A') setMode('scale2');
+            if (e.key === 'q' || e.key === 'Q') setMode('select');
+        });
+    }
+
+    init();
+
+    return {
+        selectAnim     : selectAnim,
+        newAnim        : newAnim,
+        renameAnim     : renameAnim,
+        deleteAnim     : deleteAnim,
+        setFps         : setFps,
+        setDur         : setDur,
+        play           : play,
+        stop           : stop,
+        seekTo         : seekTo,
+        setMode        : setMode,
+        setZoom        : setZoom,
+        addKeyframe    : addKeyframe,
+        deleteKeyframe : deleteKeyframe,
+        addPartFile    : addPartFile,
+        onAddParts     : onAddParts,
+        deletePart     : deletePart,
+        setProp        : setProp,
+        setParent      : setParent,
+        exportJSON     : exportJSON,
+        importJSON     : importJSON,
+        onImportJSON   : onImportJSON,
+        render         : render
+    };
+
+})();
+</script>
+
+<!-- =====================================================================
+     RUNTIME PLAYER
+     SpritePlayer(project, startAnim, images) — images: {partId: HTMLImageElement}
+====================================================================== -->
+<script id="runtime-player">
+function SpritePlayer(project, startAnim, images)
+{
+    var p = {};
+    var currentAnim = startAnim;
+    var frame = 0.0;
+    var playing = true;
+
+    function anim() { return project.anims[currentAnim]; }
+
+    function lerp(a,b,t) { return a+(b-a)*t; }
+    function lerpAngle(a,b,t) {
+        var d=b-a; while(d>180)d-=360; while(d<-180)d+=360; return a+d*t;
+    }
+
+    function keyframes(part) {
+        return Object.keys(part.keys||{}).map(Number).sort(function(a,b){return a-b;});
+    }
+
+    function localStateAt(part, f) {
+        var kf = part.keys || {};
+        var frames = keyframes(part);
+        if (!frames.length) return {x:0,y:0,rot:0,sx:1,sy:1,hidden:false,z:0};
+        // exact keyframe must win (important for step-like props such as hidden/z)
+        if (kf[f]) return Object.assign({}, kf[f]);
+        if (frames.length===1||f<=frames[0]) return Object.assign({},kf[frames[0]]);
+        if (f>=frames[frames.length-1]) return Object.assign({},kf[frames[frames.length-1]]);
+        var lo,hi;
+        for (var i=0;i<frames.length-1;i++) {
+            if(frames[i]<=f&&frames[i+1]>=f){lo=frames[i];hi=frames[i+1];break;}
+        }
+        var t=(f-lo)/(hi-lo), a=kf[lo], b=kf[hi];
+        return { x:lerp(a.x,b.x,t), y:lerp(a.y,b.y,t),
+                 rot:lerpAngle(a.rot,b.rot,t), sx:lerp(a.sx,b.sx,t), sy:lerp(a.sy,b.sy,t),
+                 hidden:a.hidden, z:a.z };
+    }
+
+    function getPart(id) {
+        if (!anim()) return null;
+        for (var i=0;i<anim().parts.length;i++) if(anim().parts[i].id===id) return anim().parts[i];
+        return null;
+    }
+
+    function worldStateAt(part, f) {
+        var local = localStateAt(part, f);
+        if (!part.parent) return local;
+        var parentPart = getPart(part.parent);
+        if (!parentPart) return local;
+        var pw = worldStateAt(parentPart, f);
+        if (pw.hidden) { var r=Object.assign({},local); r.hidden=true; return r; }
+        var prad = pw.rot*Math.PI/180;
+        var cos=Math.cos(prad), sin=Math.sin(prad);
+        return {
+            x: pw.x + (local.x*pw.sx)*cos - (local.y*pw.sy)*sin,
+            y: pw.y + (local.x*pw.sx)*sin + (local.y*pw.sy)*cos,
+            rot: pw.rot+local.rot, sx:pw.sx*local.sx, sy:pw.sy*local.sy,
+            hidden:local.hidden, z:local.z
+        };
+    }
+
+    p.setAnim = function(name) { if(currentAnim!==name){currentAnim=name;frame=0;} };
+
+    p.update = function(dt) {
+        if (!anim()||!playing) return;
+        frame += anim().fps * dt;
+        if (frame >= anim().duration) frame = 0;
+    };
+
+    p.draw = function(ctx, cx, cy, scale) {
+        if (!anim()) return;
+        scale = scale || 1;
+        var f = Math.floor(frame);
+        var parts = anim().parts.slice().sort(function(a,b){
+            return worldStateAt(a,f).z - worldStateAt(b,f).z;
+        });
+        for (var i=0;i<parts.length;i++) {
+            var part=parts[i];
+            var s=worldStateAt(part,f);
+            if(s.hidden) continue;
+            var img=images[part.id];
+            if(!img) continue;
+            ctx.save();
+            ctx.translate(cx+s.x*scale, cy+s.y*scale);
+            ctx.rotate(s.rot*Math.PI/180);
+            ctx.scale(s.sx*scale, s.sy*scale);
+            ctx.drawImage(img,-img.width/2,-img.height/2);
+            ctx.restore();
+        }
+    };
+
+    p.getFrame = function() { return Math.floor(frame); };
+    p.setFrame = function(f) { frame=f; };
+    p.pause    = function() { playing=false; };
+    p.resume   = function() { playing=true; };
+
+    return p;
+}
+</script>
+</body>
+</html>
