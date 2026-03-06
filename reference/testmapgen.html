@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html>
+<body style="margin:0;">
+
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+     background:#222;
+    font-family: monospace;
+    /* font-size: 18px; */
+    font-size: 16px;
+        overflow-x: hidden;
+}
+
+* {
+
+    font-family: monospace;
+        font-size: 16px;
+}
+#toolbar {
+    left: 0; top: 0;
+    width: 100%;
+    background: #333;
+    padding: 6px;
+    display: flex;
+    gap: 6px;
+    color: white;
+}
+
+#c {
+    float : left;
+    display:block; 
+        border: 2px solid #fff;
+}
+
+#c {
+    margin-top: 26px;
+    margin-left: 40px;
+}
+
+.right{
+    float : right;
+}
+
+.right > div {
+
+    margin-top: 26px;
+    margin-right: 40px;    
+    background: #8f8f8f;
+    padding: 16px;
+    
+    }
+
+button {
+    padding: 4px 8px;
+    border: 2px solid transparent;
+    padding: 10px;
+    color: #fff;
+    font-weight: bold;
+    background-color: #b75151;
+}
+
+button:hover, .selected {
+    border-color: #fff;
+}
+</style>
+
+<div id="toolbar">
+    <button data-tool="FLOOR">Floor</button>
+    <button data-tool="WALL">Wall</button>
+    <button data-tool="DOOR">Door</button>
+    <button data-tool="MOB">Mob</button>
+    <button data-tool="CHEST">Chest</button>
+    <button data-tool="UNKNOWN">None</button>
+</div>
+
+<div>
+    <canvas id="c" width="800" height="600" style=""></canvas>
+    
+    <div class="right">
+    <div id="current-tile">
+        Selected tile : <br>
+        
+        Type : <span id="current-tile-type"></span><br>
+        Rotation : <input id="current-tile-rotation" type="text"></span> <br>
+        Texture : <select id="current-tile-texture"></select> <br>
+    </div>
+    
+    
+    <div id="restore-form">
+    <input type="file" id="map-restore">
+        <div>
+            <button onclick="loadJSON(); return false;">Load map from JSON</button>
+            <button onclick="saveJSON(); return false;">Save map to JSON</button>
+        </div>
+    </div>
+    <div id="map-create">
+        <input type="text" id="current-map-x" value="" placeholder="X">
+        <input type="text" id="current-map-y" value="" placeholder="Y">
+        <div>
+            <button onclick="createMap();">Create</button>
+        </div>
+    </div>
+    </div>
+    
+    <div style="clear : both;"></div>
+</div>
+
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+const TILE = 32;
+
+// типы тайлов
+const FLOOR = 9;
+const WALL = 1;
+const WALL_CORNER = 2;
+const WALL_STRAIGHT = 3;
+const DOOR = 4;
+const MOB = 5;
+const CHEST = 6;
+
+let hoverX = -1;
+let hoverY = -1;
+
+const ACTION_IDLE = 0;
+const ACTION_ADD = 1;
+const ACTION_REMOVE = 2;
+
+var types = {
+    "FLOOR" : "#444",
+    "WALL" : "#777",
+    "WALL_CORNER" : "#999",
+    "WALL_STRAIGHT" : "#888",
+    "DOOR" : "#b5651d",
+    "MOB" : "#ff4444",
+    "CHEST" : "#daa520",
+    "UNKNOWN" : "#000",
+};
+
+var tools = {
+    "FLOOR" : {id : FLOOR},
+    "WALL" : {id : WALL},
+    "DOOR" : {id : DOOR},
+    "MOB" : {id : MOB},
+    "CHEST" : {id : CHEST},
+};
+
+var mob_types = [
+    "RAT",
+    "SPIDER",
+    "DOLL",
+    "GHOST",
+];
+
+var prop_types = [
+    "DOLL_PART",
+    "KEY",
+    "HEAL",
+    "CHEESE",
+    "COIN",
+];
+  
+var textures = [
+    'maze.tim',
+    'maze_02.tim',
+];
+  
+let currentTool = "FLOOR";
+
+// карта большого размера
+const MAP_W = 120;
+const MAP_H = 120;
+
+
+function setCeil(x, y, type) {
+    
+    var tile = {
+        type : type,
+        rotation : 0,
+        texture : 0,
+    };
+    
+    if (type == "WALL") {
+        tile.wall_type = "DOT";
+    }
+    
+    if (type == "MOB") {
+        tile.mob_type = 1;
+    }
+
+    map[y][x] = tile;
+}
+
+let map = [];
+for (let y=0;y<MAP_H;y++){
+    map[y] = [];
+    for (let x=0;x<MAP_W;x++){
+        setCeil(x, y, "UNKNOWN");
+    }
+}
+
+// камера
+let camX = 0;
+let camY = 0;
+
+var currentTile = false;
+
+// === смена инструмента ===
+
+
+var buttons = document.querySelectorAll("#toolbar button");
+
+for (var i = 0; i < buttons.length; i++) {
+    buttons[i].style.backgroundColor = types[buttons[i].getAttribute('data-tool')];
+    buttons[i].onclick = function() {
+    
+        currentTool = this.getAttribute('data-tool');
+        
+        for (var i = 0; i < buttons.length; i++) {
+            buttons[i].classList.remove('selected');
+        }
+        
+        this.classList.add('selected');
+    }
+}
+
+function loadJSON() {
+    
+    var fileInput = document.getElementById('map-restore');
+
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            map = JSON.parse(e.target.result);
+            console.log("Загружено:", map);
+        } catch (err) {
+            console.error("Ошибка парсинга JSON:", err);
+        }
+    };
+    reader.readAsText(file);
+}
+
+function saveJSON() {
+    const dataStr = JSON.stringify(map, null, 2);   // красивый формат
+    const blob = new Blob([dataStr], { type: "application/json" });
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+
+    a.href = url;
+    a.download = "map.json";
+    a.click();
+
+    URL.revokeObjectURL(url);
+}
+
+function updateMapInfo() {
+    document.getElementById('current-map-x').value = MAP_W;
+    document.getElementById('current-map-y').value = MAP_H;
+}
+
+function updateTextureList(selected) {
+    
+    var html = "";
+    for (var i = 0; i < textures.length; i++) {
+        html += '<option value="' + i + '" ' +  (selected == i ? 'selected' : '') + '>' + textures[i] + "</option>";
+    }
+    
+    document.getElementById('current-tile-texture').innerHTML = html;
+}
+
+function getEventPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const tx = Math.floor(mx / TILE + camX);
+    const ty = Math.floor(my / TILE + camY);
+    
+    return {x : tx, y : ty};
+}
+
+function updateSelectedTileInfo() {
+    
+    if (!currentTile) return;
+    
+    var typeTitle;
+    var type = map[currentTile.y][currentTile.x].type;
+    
+      switch (type) {
+        case "MOB":
+            
+            typeTitle = "Спавнер мобов";
+            break;
+        case "WALL":
+            
+            
+        default:
+            typeTitle = type;
+            break;
+    }
+
+    document.getElementById('current-tile-type').textContent = typeTitle;
+    document.getElementById('current-tile-rotation').value = map[currentTile.y][currentTile.x].rotation;
+    
+    updateTextureList(map[currentTile.y][currentTile.x].texture);
+    updateMapInfo();
+}
+
+function mouseDraw(e, move) {
+
+    var pos = getEventPos(e);
+    if (map[pos.y] && map[pos.y][pos.x]) {
+        
+        if (e.buttons === ACTION_ADD) {
+            currentTile = pos;
+        }
+        
+        if (map[pos.y][pos.x].type.startsWith("UNKNOWN")) {
+        
+            console.log(map[pos.y][pos.x].type);
+            drawTile(pos.x, pos.y, e.buttons);
+            
+        } else if (e.buttons == ACTION_REMOVE) {
+        
+            drawTile(pos.x, pos.y, ACTION_REMOVE);
+        }
+        
+        updateSelectedTileInfo();
+    }
+}
+
+canvas.addEventListener("mousedown", e=>{
+    mouseDraw(e, false);
+});
+
+canvas.addEventListener("mousemove", e=>{
+
+    updateHover(e);
+    mouseDraw(e, true);
+});
+
+function updateHover(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    hoverX = Math.floor(mx / TILE + camX);
+    hoverY = Math.floor(my / TILE + camY);
+}
+
+function drawTile(tx, ty, action){
+
+    
+    if (!map[ty] || !map[ty][tx]) return;
+    
+    if (action === ACTION_ADD) {
+        setCeil(tx, ty, currentTool);
+        autoFixWallsAround(tx, ty);
+    } else if (action === ACTION_REMOVE) {
+        setCeil(tx, ty, "UNKNOWN");
+        autoFixWallsAround(tx, ty);
+    }
+}
+
+// запрет контекстного меню
+canvas.addEventListener("contextmenu", e=>e.preventDefault());
+
+// === автоматическая корректировка стен ===
+function autoFixWallsAround(x,y){
+    for (let dy=-1; dy<=1; dy++){
+        for (let dx=-1; dx<=1; dx++){
+            fixWall(x+dx, y+dy);
+        }
+    }
+}
+
+// -----------------------------
+// Функция: корректировка типа стены
+// -----------------------------
+function fixWall(x, y) {
+    if (!map[y] || !map[y][x]) return;
+       
+    // Обрабатываем только "стеновые" клетки
+    if (!String(map[y][x].type).startsWith("WALL")) return;
+    
+    
+    
+    // считаем соседей — true если сосед вообще стеновой метки
+    const up    = !!(map[y-1] && String(map[y-1][x].type).startsWith("WALL"));
+    const right = !!(map[y]   && String(map[y][x+1].type).startsWith("WALL"));
+    const down  = !!(map[y+1] && String(map[y+1][x].type).startsWith("WALL"));
+    const left  = !!(map[y]   && String(map[y][x-1].type).startsWith("WALL"));
+
+    // УГЛЫ (однозначно: сочетания up+right, right+down, down+left, left+up)
+    if (up && right && !down && !left)    { map[y][x].wall_type = "CORNER_UR"; return; }
+    if (right && down && !left && !up)    { map[y][x].wall_type = "CORNER_DR"; return; }
+    if (down && left && !up && !right)    { map[y][x].wall_type = "CORNER_DL"; return; }
+    if (left && up && !right && !down)    { map[y][x].wall_type = "CORNER_UL"; return; }
+
+    // если есть три направления — сделаем T-образную, но визуально можно отрисовать как перекрёсток
+    if (up && right && down && !left)     { map[y][x].wall_type = "T_RIGHT"; return; }
+    if (right && down && left && !up)     { map[y][x].wall_type = "T_DOWN"; return; }
+    if (down && left && up && !right)     { map[y][x].wall_type = "T_LEFT"; return; }
+    if (left && up && right && !down)     { map[y][x].wall_type = "T_UP"; return; }
+
+    // пересечение 4 направлений
+    if (up && right && down && left)      { map[y][x].wall_type = "CROSS"; return; }
+
+    // ПРОМЫЖУТОЧНЫЕ СЛУЧАИ: прямые (гориз/верт) — если есть оба противоположных соседа
+    if (left && right)  { map[y][x].wall_type = "STRAIGHT_H"; return; }
+    if (up && down)     { map[y][x].wall_type = "STRAIGHT_V"; return; }
+
+    // один сосед — сохраним направление как прямую в соответствующей ориентации
+    if (left || right)  { map[y][x].wall_type = "STRAIGHT_H"; return; }
+    if (up || down)     { map[y][x].wall_type = "STRAIGHT_V"; return; }
+
+    // вообще нет соседей — одиночная точка
+    map[y][x].wall_type = "DOT";
+}
+
+// -----------------------------
+// Функция: рисует стенку по её типу
+// -----------------------------
+function drawWallShape(tile, screenX, screenY, mapX, mapY) {
+    // координаты центра клетки
+    const px = screenX;
+    const py = screenY;
+    const cx = px + TILE/2;
+    const cy = py + TILE/2;
+    const half = TILE/2;
+    const quarter = TILE/4;
+
+    ctx.lineWidth = Math.max(2, TILE / 8);
+    ctx.strokeStyle = "#ddd";
+    ctx.lineCap = "round";
+
+    ctx.beginPath();
+
+    // helper: рисует руку от центра к направлению
+    function handTo(dir) {
+        if (dir === "up") {
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx, py + 4); // чуть ниже верхней грани
+        } else if (dir === "down") {
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(cx, py + TILE - 4);
+        } else if (dir === "left") {
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(px + 4, cy);
+        } else if (dir === "right") {
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(px + TILE - 4, cy);
+        }
+    }
+
+    // отрисовка в зависимости от типа
+    switch (tile.wall_type) {
+        case "DOT":
+            // маленький квадрат - одиночная точка стены
+            ctx.strokeRect(cx - quarter, cy - quarter, quarter*2, quarter*2);
+            break;
+
+        case "STRAIGHT_H":
+            ctx.moveTo(px + 2, cy);
+            ctx.lineTo(px + TILE - 2, cy);
+            break;
+
+        case "STRAIGHT_V":
+            ctx.moveTo(cx, py + 2);
+            ctx.lineTo(cx, py + TILE - 2);
+            break;
+
+        case "CORNER_UR":
+            handTo("up");
+            handTo("right");
+            break;
+        case "CORNER_DR":
+            handTo("down");
+            handTo("right");
+            break;
+        case "CORNER_DL":
+            handTo("down");
+            handTo("left");
+            break;
+        case "CORNER_UL":
+            handTo("up");
+            handTo("left");
+            break;
+
+        case "T_RIGHT":
+            handTo("up");
+            handTo("down");
+            handTo("right");
+            break;
+        case "T_DOWN":
+            handTo("left");
+            handTo("right");
+            handTo("down");
+            break;
+        case "T_LEFT":
+            handTo("up");
+            handTo("down");
+            handTo("left");
+            break;
+        case "T_UP":
+            handTo("left");
+            handTo("right");
+            handTo("up");
+            break;
+
+        case "CROSS":
+            handTo("up");
+            handTo("down");
+            handTo("left");
+            handTo("right");
+            break;
+
+        default:
+            // на всякий случай: если тип похож на wall_*
+            if (String(tile.type).startsWith("WALL")) {
+                ctx.moveTo(px + 2, cy); ctx.lineTo(px + TILE - 2, cy);
+            }
+            break;
+    }
+
+    ctx.stroke();
+
+    // Тонкая тёмная окантовка для контраста (опционально)
+    ctx.strokeStyle = "rgba(0,0,0,0.25)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px+1, py+1, TILE-2, TILE-2);
+}
+
+function getCamBounds() {
+    
+   var bounds = {
+         startX : Math.floor(camX),
+         startY : Math.floor(camY),
+    };
+    
+    bounds.endX = bounds.startX + Math.ceil(canvas.width / TILE);
+    bounds.endY = bounds.startY + Math.ceil(canvas.height / TILE);
+    
+    return bounds;
+}
+
+// === ОТРИСОВКА ===
+function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    var camBounds = getCamBounds();
+
+    for (let y=camBounds.startY; y<camBounds.endY; y++){
+        for (let x=camBounds.startX; x<camBounds.endX; x++){
+            if (!map[y] || !map[y][x]) continue;
+
+            let tileType = map[y][x].type;
+            
+            let tile = map[y][x];
+            
+            if (tileType.startsWith("WALL")) {
+                drawWallShape(tile, (x - camX)*TILE, (y - camY)*TILE);
+                continue;
+            } else {
+                // обычные тайлы
+                if (typeof types[tileType] != "undefined") ctx.fillStyle = types[tileType];
+                else ctx.fillStyle = types["UNKNOWN"];
+
+                ctx.fillRect(
+                    (x - camX)*TILE,
+                    (y - camY)*TILE,
+                    TILE, TILE
+                );
+            }
+        }
+    }
+
+    // === ТЕКСТОВЫЙ ОВЕРЛЕЙ ===
+    //  ctx.fillStyle = "rgba(0,0,0,0.6)";
+    // ctx.fillRect(0, 0, 220, 60);
+
+    ctx.fillStyle = "white";
+    ctx.font = "14px sans-serif";
+
+    ctx.fillText("X: " + hoverX + " Y: " + hoverY, 10, 20);
+    ctx.fillText("Tool: " + currentTool, 10, 40);
+    
+    highlightTile(hoverX, hoverY, {r : 255, g : 255, b : 0});
+    if (currentTile) {
+        highlightTile(currentTile.x, currentTile.y, {r : 183, g : 102, b : 20});
+    }
+
+    requestAnimationFrame(draw);
+}
+
+function highlightTile(posX, posY, color) {
+
+    var camBounds = getCamBounds();
+    if (
+        posX >= camBounds.startX && posX < camBounds.endX &&
+        posY >= camBounds.startY && posY < camBounds.endY
+    ) {
+        ctx.fillStyle = "rgba(" + color.r + "," + color.g + "," + color.b + ",0.35)";
+        ctx.fillRect(
+            (posX - camX) * TILE,
+            (posY - camY) * TILE,
+            TILE, TILE
+        );
+
+        // граница
+        ctx.strokeStyle = "rgba(" + color.r + "," + color.g + "," + color.b + ",0.9)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(
+            (posX - camX) * TILE + 1,
+            (posY - camY) * TILE + 1,
+            TILE - 2,
+            TILE - 2
+        );
+    }
+
+}
+
+draw();
+
+// === управление камерой WASD ===
+document.addEventListener("keydown", e=>{
+    if (e.key === "w") camY -= 1;
+    if (e.key === "s") camY += 1;
+    if (e.key === "a") camX -= 1;
+    if (e.key === "d") camX += 1;
+});
+</script>
+
+</body>
+</html>
