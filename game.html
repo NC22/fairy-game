@@ -42,6 +42,8 @@
     стреляющие враги \ боссы
     пошаговый режим
     рисовать нижние боковые уголки стен после основы
+    лвл откатывается
+    при победе предлагает след. этаж и сбрасывает уровен? - нужно делать диалог с наставником 
 -->
 
 <style>
@@ -923,20 +925,21 @@ function generate() {
         var tx = rB.cx, ty = rB.cr;
 
         while (x !== tx) {
-            if (!tunnelTooClose(x, y, rA, rB) || Math.abs(x-tx) <= 2)
+            // Всегда прорезаем, если близко к цели ИЛИ не мешает другим комнатам
+            if (!tunnelTooClose(x, y, rA, rB) || Math.abs(x - tx) <= 3)
                 env.map[y][x] = env.makeTile('FLOOR');
-
             x += x < tx ? 1 : -1;
         }
 
         while (y !== ty) {
-            if (!tunnelTooClose(x, y, rA, rB) || Math.abs(y-ty) <= 2)
+            if (!tunnelTooClose(x, y, rA, rB) || Math.abs(y - ty) <= 3)
                 env.map[y][x] = env.makeTile('FLOOR');
-
             y += y < ty ? 1 : -1;
         }
 
-        env.map[ty][tx] = env.makeTile('FLOOR');
+        // Гарантируем точку поворота и финальную точку
+        env.map[rA.cr][tx] = env.makeTile('FLOOR'); // точка поворота (угол)
+        env.map[ty][tx] = env.makeTile('FLOOR');     // конечная точка
     }
 
     // Build MST: connect each room to its nearest already-connected room
