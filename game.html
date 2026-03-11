@@ -32,6 +32,18 @@
 <script src="data/items.js"></script>
 <script src="data/cages.js"></script>
 
+<!--
+    Todo - дополнить класс item локигой chest \ сделать дочерний класс
+    вынести torch \ generator в отдельные классы
+    свечение для ключей \ диалоги с феями
+    по завершению этапов с феями предлагать выбрать этаж или спустится ниже через наставника
+    ключи в инвентаре через картинки
+    сохранять набор ключей при спуске \ рестарте
+    стреляющие враги \ боссы
+    пошаговый режим
+    рисовать нижние боковые уголки стен после основы
+-->
+
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   body { background:#0a0a08; font-family:'Courier New',monospace; overflow:hidden; user-select:none; }
@@ -52,10 +64,6 @@
 
 <script>
 
-
-// ============================================================
-//  MAIN GAME  (G)
-// ============================================================
 var G = (function(){
 
   var env = this;
@@ -78,6 +86,7 @@ var G = (function(){
   env.dmgNums    = [];
   env.projectiles= [];
   env.fairies    = [];
+  env.torches    = [];
   env.player     = null;
   env.camera     = new CameraController(env).make(0, 0);
   // modal: null | 'inventory' | 'pause' | 'gameover' | 'win' | 'mainmenu' | 'controls'
@@ -116,6 +125,8 @@ var G = (function(){
   // ---- HUD/UI system ----
   var gameUI = null; // initialized after canvas ready
   
+  var dirs=[{dc:1,dr:0},{dc:-1,dr:0},{dc:0,dr:1},{dc:0,dr:-1}]; // for random
+  
   var KEY_GROUPS = {
       up:        ['arrowup', 'w', 'ц'],
       down:      ['arrowdown', 's', 'ы'],
@@ -132,17 +143,54 @@ var G = (function(){
         return KEY_GROUPS[group] && KEY_GROUPS[group].includes(key);
     }
     
-  // ---- isWall ----
-  env.isWall = function(c, r) {
-    if (r<0||r>=env.cfg.mapH||c<0||c>=env.cfg.mapW) return true;
-    if (env.map[r][c] === 1) return true;
-    for(var i=env.entities.length-1;i>=0;i--){
-      var e=env.entities[i];
-      if(e.isChest && !e.broken && e.c===c&&e.r===r) return true;
-      if(e.isCage && e.c===c&&e.r===r) return true;
-    }
-    return false;
-  };
+    env.makeTile = function(type) {
+        return { type: type, visited: 0, light: 0 };
+    };
+
+    // Проверки типов тайла (замена сравнений с числами 0/1/2)
+    env.isWall = function(c, r) {
+        if (r < 0 || r >= env.cfg.mapH || c < 0 || c >= env.cfg.mapW) return true;
+        var t = env.map[r] && env.map[r][c];
+        if (!t || t.type === 'WALL') return true;
+        // Закрытая дверь — непроходима
+        // Ящики и клетки — как и раньше
+        for (var i = env.entities.length - 1; i >= 0; i--) {
+            var e = env.entities[i];
+            if (e.isItem && e.isDoor && !e.door_open && e.c === c && e.r === r) return true;
+
+    
+            if (e.isChest && !e.broken && e.c === c && e.r === r) return true;
+            if (e.isCage && e.c === c && e.r === r) return true;
+            if (e.isItem && e.isBlocking && !e.picked && e.c === c && e.r === r) return true;
+        }
+        return false;
+    };
+
+    env.isVoid = function(c, r) {
+        if (r < 0 || r >= env.cfg.mapH || c < 0 || c >= env.cfg.mapW) return true;
+        return !env.map[r][c]; // null = VOID
+    };
+
+    env.isFloor = function(c, r) {
+        if (r < 0 || r >= env.cfg.mapH || c < 0 || c >= env.cfg.mapW) return false;
+        var t = env.map[r] && env.map[r][c];
+        return t && (t.type === 'FLOOR' || t.type === 'STAIRS');
+    };
+
+    env.isStairs = function(c, r) {
+        var t = env.map[r] && env.map[r][c];
+        return t && t.type === 'STAIRS';
+    };
+
+    env.isDoor = function(c, r) {
+        var t = env.map[r] && env.map[r][c];
+        return t && t.type === 'DOOR';
+    };
+
+    env.setTileStairs = function(c, r) {
+        if (env.map[r] && env.map[r][c]) env.map[r][c].type = 'STAIRS';
+    };
+   
 
   // ---- Annotations ----
   var LOG_COLORS = {hit:'#dd4444', kill:'#ffcc00', pick:'#44cc88', quest:'#8899ff', fairy:'#ff88ff', info:'#888'};
@@ -166,11 +214,22 @@ var G = (function(){
   env.drawSpr = function(ctx, k, x, y, sz) {
     var s = SPRITES[k];
     if (s && s.img) {
-      var sz1 = env.TILE * s.scale;
-      ctx.drawImage(s.img, x - sz1/2 + s.ox, y - sz1/2 + s.oy, sz1, sz1);
+    
+
+      if (sz === 1) {
+        // scale from original image w x h
+        var sz1 = s.img.naturalWidth * s.scale;
+        var sz2 = s.img.naturalHeight * s.scale;
+        ctx.drawImage(s.img, x - sz1/2 + s.ox, y - sz2/2 + s.oy, sz1, sz2);
+      } else {
+        // fit to tile size scale = 1 - tilesize
+        var sz1 = env.TILE * s.scale;
+        ctx.drawImage(s.img, x - sz1/2 + s.ox, y - sz1/2 + s.oy, sz1, sz1);
+      }
     } 
   }
-
+  
+  
   // ---- Particle factories ----
   env.spawnParticle = function(x, y, vx, vy, life, color, size, type) {
     var p = new Particle(env);
@@ -216,10 +275,10 @@ var G = (function(){
   env.drawInteractHint = function(c, r, drawX, drawY, text, options) {
     if(env.player){
       
-      var d = mdist(c, r, env.player.c, env.player.r);
-      
-      if (typeof options == 'undefined') options = {checkD : 1, fontSize : 7};
-      
+      if (typeof options == 'undefined') options = {checkD : 1, fontSize : 7, fromC : env.player.c, fromR : env.player.r};
+            
+      var d = mdist(c, r, options.fromC, options.fromR);
+
       if(d === options.checkD){
         var pulse = 0.6 + 0.4*Math.sin(Date.now()*0.005);
         ctx.globalAlpha = pulse;
@@ -267,266 +326,817 @@ var G = (function(){
     return n.make(id, c, r);
   }
 
-  // ---- Cell occupation tracker (for spawn collision avoidance) ----
-  function buildOccupied() {
-    var occ = {};
-    // Tiles of type 2 (stairs)
-    for (var r = 0; r < env.cfg.mapH; r++) {
-      for (var c = 0; c < env.cfg.mapW; c++) {
-        if (env.map[r][c] === 2) occ[c + ',' + r] = true;
-      }
-    }
-    // Existing entities
-    for (var i = 0; i < env.entities.length; i++) {
-      var e = env.entities[i];
-      if (e.c !== undefined && e.r !== undefined) occ[e.c + ',' + e.r] = true;
-    }
-    return occ;
-  }
-
   function occupy(occ, c, r) { occ[c + ',' + r] = true; }
-  function isFree(occ, c, r) { return !occ[c + ',' + r] && env.map[r] && env.map[r][c] === 0; }
-
+  function isFree(occ,c,r) {
+        if (occ[c+','+r]) return false;
+        var t = env.map[r] && env.map[r][c];
+        return t && (t.type==='FLOOR' || t.type==='STAIRS');
+    }
+    
   function findFreeCell(occ, room, tries) {
     tries = tries || 30;
+    
     for (var t = 0; t < tries; t++) {
       var tc = room.c + randi(1, room.w - 2);
       var tr = room.r + randi(1, room.h - 2);
-      if (isFree(occ, tc, tr)) return {c: tc, r: tr};
+      if (isFree(occ, tc, tr)) {
+        
+        return {c: tc, r: tr};
+      }
     }
     return null;
   }
 
-  // ---- Generation ----
-  function generate() {
+
+
+// Строит маску принадлежности стен к комнатам:
+// стены по периметру комнаты получают id этой комнаты.
+function buildRoomMask(rooms) {
+    var mapH = env.cfg.mapH, mapW = env.cfg.mapW;
+    var mask = [];
+    for (var y = 0; y < mapH; y++) { mask[y] = []; for (var x = 0; x < mapW; x++) mask[y][x] = -1; }
+
+    for (var ri = 0; ri < rooms.length; ri++) {
+        var rm = rooms[ri];
+        // Периметр комнаты — строки/столбцы вокруг FLOOR-прямоугольника
+        for (var y = rm.r - 1; y <= rm.r + rm.h; y++) {
+            for (var x = rm.c - 1; x <= rm.c + rm.w; x++) {
+                if (y < 0 || y >= mapH || x < 0 || x >= mapW) continue;
+                var t = env.map[y] && env.map[y][x];
+                if (t && t.type === 'WALL') {
+                    // Назначаем только если ещё не принадлежит другой комнате
+                    if (mask[y][x] === -1) mask[y][x] = ri;
+                }
+            }
+        }
+    }
+    return mask;
+}
+
+
+
+function isFloor(y, x) {
+    var t = env.map[y] && env.map[y][x];
+    return t && (t.type === 'FLOOR' || t.type === 'DOOR');
+}
+
+function assignSpriteTypes(rooms) {
+    var mapH = env.cfg.mapH, mapW = env.cfg.mapW;
+
+
+    function getWallSpriteType(y, x) {
+        var floorUp        = isFloor(y - 1, x);
+        var floorDown      = isFloor(y + 1, x);
+        var floorLeft      = isFloor(y, x - 1);
+        var floorRight     = isFloor(y, x + 1);
+        var floorDownRight = isFloor(y + 1, x + 1);
+        var floorDownLeft  = isFloor(y + 1, x - 1);
+        var floorUpRight   = isFloor(y - 1, x + 1);
+        var floorUpLeft    = isFloor(y - 1, x - 1);
+
+        // Углы — только диагональный пол, без прямых соседей-полов
+        if (!floorUp && !floorDown && !floorLeft && !floorRight) {
+            if (floorDownRight) return 'wall_up_corner_a_left';  // ┌
+            if (floorDownLeft)  return 'wall_up_corner_a';       // ┐
+            if (floorUpRight)   return 'wall_down_corner_b_left'; // └
+            if (floorUpLeft)    return 'wall_down_corner_b';      // ┘
+            return 'wall_dot';
+        }
+        
+        function checkExitHoriz(up) { /// ----------
+        
+            // доп. проверка наличия выходов рядом со стеной
+            if (floorLeft) return 'wall_dot';  
+            if (floorRight) return 'wall_dot';
+            
+            if (up) {
+            
+                var custom_hup = ['b', 'c','d','e', 'b', 'c','d','e', 'b', 'c','d','e'];
+                
+                if ((y+x)%2===0) return 'wall_h_up_' + custom_hup[randi(0, custom_hup.length-1)];
+                else return 'wall_h_up_a';
+                
+            } else 
+            
+            return Math.random() < 0.5 ? 'wall_h_bottom_a' : 'wall_h_bottom_b';
+        }
   
-    resetKeys();
+        function checkExitVert(left) { // /\/\/\
+        
+            // доп. проверка наличия выходов рядом со стеной
+            if (floorUp) return 'wall_dot';  
+            if (floorDown) return 'wall_dot';
+            
+            if (left) 
+            return Math.random() < 0.8 ? 'wall_v_a_left' : 'wall_v_b_left';
+            else 
+            return Math.random() < 0.5 ? 'wall_v_a' : 'wall_v_b';
+        }
+        
+        // Горизонтальные стены
+        if (floorDown && !floorUp) // на клетку ниже есть пол и нет пола сверху - это верхняя часть комнаты
+            return checkExitHoriz(true);
+        if (floorUp && !floorDown)  // нижняя
+            return checkExitHoriz(false);
+
+        // Вертикальные стены
+        if (floorRight && !floorLeft)
+            return checkExitVert(true);
+        if (floorLeft && !floorRight)
+            return checkExitVert(false);
+        
+        
+        return 'wall_dot';
+    }
+
+    // Назначаем sprite_type всем стенам универсально
+    for (var y = 0; y < mapH; y++) {
+        for (var x = 0; x < mapW; x++) {
+            var t = env.map[y] && env.map[y][x];
+            
+            if (!t) continue;
+            
+            if (t.type === 'WALL') {
+                t.sprite_type = getWallSpriteType(y, x);
+            } else if (t.type === 'FLOOR' || t.type === 'DOOR') {
+            
+                var type = (y+x)%2===0 ? 1 : 2;
+                var subtype = 0;
+                if (type == 1) {
+                    subtype = (randi(1, 2 * 100) % 2) + 1;
+                } else {
+                    subtype = (randi(1, 3 * 100) % 3) + 1;
+                }
+                t.sprite_flip_v = randi(0, 1) == 1 ? true : false ; 
+                t.sprite_flip_h = randi(0, 1) == 1 ? true : false ;
+                t.sprite_type = 'floor_' + (type == 1 ? 'a' : 'b') + '_' + subtype;
+            }
+        }
+    }
     
-    env.cfg.mapW = 30; env.cfg.mapH = 20;
+    function isValidWall(y, x) {
+
+        var t2 = env.map[y] && env.map[y][x];
+        if (!t2) return false;
+        if (t2.type !== 'WALL') return false;
+        if (t2.sprite_type=='wall_dot') return false;
+        return true;
+    }
+    
+    for (var y = 0; y < mapH; y++) {
+        for (var x = 0; x < mapW; x++) {
+            var t = env.map[y] && env.map[y][x];
+            
+            if (!t) continue;
+            var floorUp        = isFloor(y - 1, x);
+            var floorDown      = isFloor(y + 1, x);
+                
+            if (t.type === 'WALL' && t.sprite_type == 'wall_dot') {
+            
+                if (floorUp && !floorDown && isFloor(y, x + 1) && isValidWall(y+1, x) && isValidWall(y, x-1)) {
+                   
+                    t.sprite_type = 'wall_down_corner_a';
+                    continue;
+                }
+                
+                if (floorUp && !floorDown && isFloor(y, x - 1) && isValidWall(y+1, x) && isValidWall(y, x+1)) {
+                   
+                    t.sprite_type = 'wall_down_corner_a_right';
+                    continue;
+                }
+            } 
+        }
+    } 
+   
+}
+
+function checkNearMapByType(dx, dy, validType, inValid, range) {
+    for (var ny = dy - range; ny <= dy + range; ny++) {
+        for (var nx = dx - range; nx <= dx + range; nx++) {
+            if (nx === dx && ny === dy) continue;
+            var nt = env.map[ny] && env.map[ny][nx];
+           
+            if (inValid) { 
+                if (!nt) continue;
+                if (nt.type === validType) return false;
+            } else {
+                if (!nt || nt.type !== validType) return false;
+            }
+        }
+    }
+    
+    return true;
+}
+
+// ---- Размещение одиночных (dot) стен внутри комнат ----
+function placeDotWalls(rooms) {
+    var mapH = env.cfg.mapH, mapW = env.cfg.mapW;
+
+    for (var ri = 0; ri < rooms.length; ri++) {
+        var rm = rooms[ri];
+        // Внутренняя площадь комнаты (без стен по периметру)
+        var innerW = rm.w - 2, innerH = rm.h - 2;
+        if (innerW < 3 || innerH < 3) continue; // слишком мало места
+
+        var count = randi(0, 2); // 0–2 dot стены на комнату
+        var placed = 0, tries = 0;
+
+        while (placed < count && tries < 40) {
+            tries++;
+            var dx = rm.c + 1 + randi(0, innerW - 1);
+            var dy = rm.r + 1 + randi(0, innerH - 1);
+            
+            if (!checkNearMapByType(dx, dy, 'FLOOR', false, 1)) continue;
+            
+            // Ставим dot-стену
+            env.map[dy][dx] = env.makeTile('WALL');
+            env.map[dy][dx].wall_type = 'DOT';
+            env.map[dy][dx].sprite_type = 'wall_dot';
+            env.map[dy][dx].isDotWall = true; // метка для спауна мобов
+            placed++;
+        }
+    }
+}
+
+// Убирает стены, не граничащие ни с одним проходимым тайлом (FLOOR/STAIRS/DOOR).
+function pruneVoidWalls() {
+    var mapW = env.cfg.mapW, mapH = env.cfg.mapH;
+
+    // Проверяет, является ли тайл (tx,ty) "живым" (floor/stairs/door)
+    function isPassable(tx, ty) {
+        if (tx < 0 || ty < 0 || tx >= mapW || ty >= mapH) return false;
+        var t = env.map[ty] && env.map[ty][tx];
+        if (!t) return false;
+        return t.type === 'FLOOR' || t.type === 'STAIRS' || t.type === 'DOOR';
+    }
+
+    for (var y = 0; y < mapH; y++) {
+        for (var x = 0; x < mapW; x++) {
+            var tile = env.map[y][x];
+            if (!tile || tile.type !== 'WALL') continue;
+
+            // Проверяем все 8 соседей (включая диагонали — для красивых углов)
+            var hasNeighbour = false;
+            for (var dy = -1; dy <= 1 && !hasNeighbour; dy++) {
+                for (var dx = -1; dx <= 1 && !hasNeighbour; dx++) {
+                    if (dx === 0 && dy === 0) continue;
+                    if (isPassable(x + dx, y + dy)) hasNeighbour = true;
+                }
+            }
+
+            if (!hasNeighbour) env.map[y][x] = null; // → void
+        }
+    }
+}
+
+function placeDoor(x, y, roomFrom, roomTo) {
+
+    var tile = env.map[y][x];
+    if (!tile) return false;
+    
+    if (!checkNearMapByType(x, y, 'DOOR', true, 1)) return false;
+            
+    var tL = env.map[y][x-1], tR = env.map[y][x+1];
+    var tU = env.map[y-1][x], tD = env.map[y+1][x];
+
+    var wU = tU && tU.type === 'WALL';
+    var wD = tD && tD.type === 'WALL';
+    var wL = tL && tL.type === 'WALL';
+    var wR = tR && tR.type === 'WALL';
+
+    var key = x + ',' + y;
+    var dir = null;
+
+    if (wU && wD) {
+        dir = 'H'; // положение самой двери - стены Vertical
+    } else if (wL && wR) {
+        dir = 'V'; // положение самой двери - стены Horizontal
+    }
+    
+    
+            
+    if (dir && tile.type !== 'DOOR') {
+    
+        
+        tile.type = 'DOOR';
+        
+        tile.door = makeItem('door', x, y);
+        if (y < roomFrom.r && dir == 'V') tile.door.door_side = 'up';
+        if (y > roomFrom.r && dir == 'V') tile.door.door_side = 'down';
+        if (x < roomFrom.c && dir == 'H') tile.door.door_side = 'left';
+        if (x > roomFrom.c && dir == 'H') tile.door.door_side = 'right';
+         
+        tile.door.roomFrom = roomFrom;
+        tile.door.door_dir = dir; 
+        tile.door.door_open = false;
+        tile.door.isDoor = true;
+        env.entities.push(tile.door); 
+        return true;
+    }
+    
+    return false;
+}
+
+
+// ============================================================
+//  TORCH — факел на стене комнаты
+// ============================================================
+function Torch(env, wx, wy, wallSide) {
+    this.x = wx;
+    this.y = wy;
+    this.c = Math.max(0,Math.floor((wx /env.TILE)-1));
+    this.r = Math.max(0,Math.floor((wy /env.TILE)-1));
+    this.active = false;
+    this.side = wallSide; // 'top'|'bottom'|'left'|'right'
+    this.time = Math.random() * Math.PI * 2; // случайная фаза
+    this.emitTimer = 0;
+    this.emitRate = 0.045; // секунд между частицами
+}
+
+Torch.prototype.update = function(dt) {
+
+    this.active = false;
+   var d = mdist(this.c, this.r, env.player.c, env.player.r);
+
+    if (d > 10) return;
+    this.active = true;
+    this.time += dt * (0.3 + 0.4 * Math.sin(this.time * 1.7));
+    this.emitTimer -= dt;
+    if (this.emitTimer <= 0) {
+        this.emitTimer = this.emitRate + Math.random() * 0.02;
+        this._emit();
+    }
+};
+
+Torch.prototype._emit = function() {
+    var T = env.TILE;
+    // Смещение эмиттера от центра тайла в сторону стены
+    var ex = this.x, ey = this.y;
+    // Базовая скорость вверх с небольшим боковым дрейфом
+    var vx = rand(-12, 12);
+    var vy = rand(-70, -30);
+    
+    var offsetY = -10; //this.side
+    var offsetX = 0;
+    if (this.side == 'left') {
+        offsetX = 6;
+    } else if (this.side == 'right') {
+        offsetX = -6;
+    }
+    
+    // Основное пламя (оранжево-жёлтое)
+    var flameColors = ['#ff8800','#ffaa00','#ffcc22','#ff6600'];
+    var col = flameColors[randi(0, flameColors.length-1)];
+    env.spawnParticle(offsetX + ex + rand(-3,3), offsetY + ey, vx, vy, rand(0.25, 0.55), col, rand(2.5, 5));
+
+    // Красный росчерк в основании
+    if (Math.random() < 0.2) {
+        env.spawnParticle(offsetX + ex + rand(-2,2), offsetY + ey + rand(0,4), vx * 0.5, vy * 0.4, rand(0.12, 0.4), '#cc3300', rand(1.5, 3));
+    }
+    // Белый кончик
+    if (Math.random() < 0.25) {
+        env.spawnParticle(offsetX + ex + rand(-1,1),  offsetY + ey - 2, vx * 0.3, vy * 1.2, rand(0.1, 0.2), '#ffffcc', rand(1, 2.5));
+    }
+};
+
+Torch.prototype.draw = function(ctx, glow) {
+    if (!this.active) return;
+    
+    if (glow) {
+    var T = env.TILE * 2;
+    // Пульсирующее свечение — плавный синус по времени
+    var glow = 0.32 + 0.18 * Math.sin(this.time * 3.1) + 0.08 * Math.sin(this.time * 5.7);
+    var radius = T * (1.1 + 0.35 * Math.sin(this.time * 2.3));
+
+    var grad = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, radius);
+        grad.addColorStop(0,   'rgba(255,160,30,' + (glow * 0.9).toFixed(3) + ')');
+        grad.addColorStop(0.35,'rgba(255,100,10,' + (glow * 0.55).toFixed(3) + ')');
+        grad.addColorStop(0.7, 'rgba(200,60,0,'   + (glow * 0.2).toFixed(3) + ')');
+        grad.addColorStop(1,   'rgba(0,0,0,0)');
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.restore();
+    
+    } else {
+    
+        if (this.side == 'bottom') return;
+        
+        if (this.side == 'top') env.drawSpr(ctx, 'light_h', this.x, this.y, 1); // env.drawSprTransform(ctx, h.origin.sk, 0, 0, false, true, true);
+        else if (this.side == 'left') {
+            env.drawSprTransform(ctx, 'light_v', this.x, this.y, true, false, false);
+        } else if (this.side == 'right') {
+            env.drawSpr(ctx, 'light_v', this.x, this.y, 1);
+        }
+                
+        // только сам факел
+    }
+    
+};
+
+// simplified findFreeCell with fallback pos
+function getFreeCell(occ, room, startC, startR, nullOnFail) {
+    
+    if (typeof startC == 'undefine' || !startC) {startC = room.cx; startR = room.cx;}; 
+
+    for (var ta = 0; ta < 30; ta++) {
+    
+        var nc2 = room.c + randi(1, room.w-2);
+        var nr3 = room.r + randi(1, room.h-2);
+        var dist = mdist(nc2, nr3, startC, startR);
+ 
+        if (dist >= 2 && dist <= 4 && isFree(occ, nc2, nr3)) {
+            occupy(occ, nc2, nr3); 
+            return {c : nc2, r : nr3};
+            break;
+        }
+    }
+    
+    occupy(occ, startC, startR); 
+    return nullOnFail ? null : {c : startC, r : startR};
+}
+
+// ---- Размещение факелов на стенах комнат ----
+function placeTorches(rooms) {
+    var T = env.TILE;
+    for (var ri = 0; ri < rooms.length; ri++) {
+        var rm = rooms[ri];
+        var count = randi(2, 3);
+        var sides = ['top','left','right']; // bottom
+        shuffleArr(sides);
+        var placed = 0;
+        
+        function isWalidWall(wallRow, wallCol) {
+            var t = env.map[wallRow] && env.map[wallRow][wallCol];
+            if (!t || t.type !== 'WALL') return false;
+            if (t.sprite_type == 'wall_h_up_b') return false;
+            
+            return true;
+        }
+        
+        for (var si = 0; si < sides.length && placed < count; si++) {
+            var side = sides[si];
+            var wx, wy, wallRow, wallCol;
+
+            if (side === 'top') {
+                wallRow = rm.r - 1;
+                // выбираем случайный столбец внутри комнаты (не угол)
+                wallCol = rm.c + randi(1, rm.w - 2);
+                if (!isWalidWall(wallRow, wallCol)) continue;
+                wx = wallCol * T + T / 2;
+                wy = wallRow * T + T * 0.72;
+                wy -= 10;
+            } else if (side === 'bottom') {
+                wallRow = rm.r + rm.h;
+                wallCol = rm.c + randi(1, rm.w - 2);
+                if (!isWalidWall(wallRow, wallCol)) continue;
+                wx = wallCol * T + T / 2;
+                wy = wallRow * T + T * 0.3;
+            } else if (side === 'left') {
+                wallCol = rm.c - 1;
+                wallRow = rm.r + randi(1, rm.h - 2);
+                if (!isWalidWall(wallRow, wallCol)) continue;
+                wx = wallCol * T + T * 0.72;
+                wx += 20;
+                wy = wallRow * T + T / 2;
+            } else { // right
+                wallCol = rm.c + rm.w;
+                wallRow = rm.r + randi(1, rm.h - 2);
+                if (!isWalidWall(wallRow, wallCol)) continue;
+                wx = wallCol * T + T * 0.3;
+                wx -= 20;
+                wy = wallRow * T + T / 2;
+            }
+
+            env.torches.push(new Torch(env, wx, wy, side));
+            placed++;
+        }
+    }
+    
+}
+
+function placeStaticProps(occ, room) {
+    if (Math.random()<0.7) {
+        var cell3=findFreeCell(occ,room,15);
+        if (cell3) { 
+            var itemsNum = 2;
+            
+            var staticType = Math.ceil(randi(1, 100 * itemsNum) / 100);
+            var itemKey = 'box';
+            if (staticType == 1) itemKey = 'box';
+            if (staticType == 2) itemKey = 'barel';
+            
+            env.entities.push(makeItem(itemKey, cell3.c, cell3.r)); 
+            occupy(occ,cell3.c,cell3.r); 
+           
+            var additionItemsMax = randi(0, 2);
+            if (additionItemsMax > 0)
+            for (var b=0; b<additionItemsMax; b++) {
+                var offsetX=randi(0, 2);
+                var offsetY=randi(0, 2);
+                if (offsetX == 0 && offsetY == 0) continue;
+                cell3.c += offsetX; 
+                cell3.r += offsetY;
+                //var rndDir = dirs[randi(0, dirs.length-1)];
+                //cell3.c += rndDir.dc;
+                //cell3.r += rndDir.dr;
+                if (isFree(occ, cell3.c, cell3.r)) {
+                    env.entities.push(makeItem(itemKey, cell3.c, cell3.r)); 
+                     occupy(occ,cell3.c,cell3.r);
+                } else break;
+            }
+        }
+    }
+}
+    
+function generate() {
+    resetKeys();
+
+    env.cfg.mapW = 36; env.cfg.mapH = 36;
     env.modal = null; env.canvasButtons = []; env.annotations = [];
     env.fairies = [];
     dlg.close();
+
+    var mapW = env.cfg.mapW, mapH = env.cfg.mapH;
+
+    // Init map — all WALLs (object tiles)
     env.map = [];
-
-    for (var r = 0; r < env.cfg.mapH; r++) {
-      env.map[r] = [];
-      for (var c = 0; c < env.cfg.mapW; c++) env.map[r][c] = 1;
+    for (var r = 0; r < mapH; r++) {
+        env.map[r] = [];
+        for (var c = 0; c < mapW; c++) env.map[r][c] = env.makeTile('WALL');
     }
 
+      // Place rooms
     var rooms = [];
+    var roomPadding = 3; // отступ между комнатами (в клетках)
+
     for (var att = 0; att < 60; att++) {
-      var rw=randi(4,9), rh=randi(3,7);
-      var rc=randi(1,env.cfg.mapW-rw-1), rr=randi(1,env.cfg.mapH-rh-1);
-      var ok = true;
-      for (var ri = 0; ri < rooms.length; ri++) {
-        var ro = rooms[ri];
-        if (rc<=ro.c+ro.w+1&&rc+rw>=ro.c-1&&rr<=ro.r+ro.h+1&&rr+rh>=ro.r-1){ok=false;break;}
-      }
-      if (!ok) continue;
-      for (var ry=rr;ry<rr+rh;ry++) for (var rx=rc;rx<rc+rw;rx++) env.map[ry][rx]=0;
-      rooms.push({c:rc,r:rr,w:rw,h:rh,cx:rc+Math.floor(rw/2),cr:rr+Math.floor(rh/2)});
-    }
+        var rw = randi(4,9), rh = randi(3,7);
+        var rc = randi(1, mapW-rw-1), rr = randi(1, mapH-rh-1);
+        var ok = true;
 
-    rooms.sort(function(a,b){return a.cx-b.cx;});
-    for (var i = 0; i < rooms.length-1; i++) {
-      var A=rooms[i],B=rooms[i+1],x=A.cx,y=A.cr;
-      while(x!==B.cx){env.map[y][x]=0;x+=x<B.cx?1:-1;}
-      while(y!==B.cr){env.map[y][x]=0;y+=y<B.cr?1:-1;}
-    }
+        for (var ri = 0; ri < rooms.length; ri++) {
+            var ro = rooms[ri];
 
-    env.entities=[]; env.particles=[]; env.dmgNums=[]; env.projectiles=[];
-
-    var sr = rooms[0]||{cx:2,cr:2};
-
-    // Player setup
-    if (!env.player) {
-      var p = new Player(env);
-      env.player = p.make(sr.cx, sr.cr);
-      // Restore preserved stats if any (from restart)
-      if (env.globalState.playerStats) {
-        var s = env.globalState.playerStats;
-        env.player.hp = s.hp; env.player.maxHp = s.maxHp;
-        env.player.atk = s.atk; env.player.def = s.def;
-        env.player.xp = s.xp; env.player.xpNext = s.xpNext;
-        env.player.level = s.level; env.player.gold = s.gold;
-        env.player.weapon = s.weapon; env.player.weapons = s.weapons.slice();
-        env.player.arrows = s.arrows; env.player.stamina = s.stamina;
-        env.player.maxStamina = s.maxStamina; env.player.statPoints = s.statPoints;
-        env.player.mana = s.mana || 60; env.player.maxMana = s.maxMana || 60;
-        env.player.items = s.items.map(function(x){return {kind:x.kind};});
-        env.player.fairyKeys = {};
-        env.globalState.playerStats = null;
-      }
-    } else {
-      var pl = env.player;
-      pl.c=sr.cx; pl.r=sr.cr;
-      pl.x=sr.cx*env.TILE+env.TILE/2; pl.y=sr.cr*env.TILE+env.TILE/2;
-      pl.hp=Math.min(pl.maxHp, pl.hp+4);
-      // Clear keys for new floor
-      pl.fairyKeys = {};
-    }
-    
-    // var fx = env.player.c * env.TILE + env.TILE/2, fy = env.player.r * env.TILE + env.TILE/2;
-    //var f = new Fairy(env);
-    //env.fairies.push(f.make(CDEFS[0], fx, fy));
-  
-    // Build occupied map
-    var occ = {};
-    // Mark player start
-    occupy(occ, sr.cx, sr.cr);
-    
-    // map[env.player.r][env.player.c] = 2;
-  
-    //  env.entities.push(makeCage('a', env.player.c+1, env.player.r) );
-    //  occupy(occ, env.player.c+1, env.player.r);
-    
-    // ---- Spawn starting NPC (Gormus) near first room - only floor 1 ----
-    if (floorNum === 1) {
-            var mentorCreated = false;
-          if (rooms.length > 0){
-          var npcRoom = rooms[0];
-          
-          var cell = findFreeCell(occ, npcRoom, 30);
-          // Also check distance from player
-          for (var ta = 0; ta < 30; ta++) {
-            var nc2 = npcRoom.c + randi(1, npcRoom.w - 2);
-            var nr3 = npcRoom.r + randi(1, npcRoom.h - 2);
-            var dist = mdist(nc2, nr3, sr.cx, sr.cr);
-            if (dist >= 2 && dist <= 4 && isFree(occ, nc2, nr3)) {
-              env.entities.push(makeNpc('mentor', nc2, nr3));
-              occupy(occ, nc2, nr3);
-              mentorCreated = true;
-              break;
+            if (rc <= ro.c + ro.w + roomPadding &&
+                rc + rw >= ro.c - roomPadding &&
+                rr <= ro.r + ro.h + roomPadding &&
+                rr + rh >= ro.r - roomPadding) {
+                ok = false;
+                break;
             }
-          }
-      }
-      
-      if (!mentorCreated) {
-            console.log('fallback  to place NPC');
-            env.entities.push(makeNpc('mentor', env.player.c+1, env.player.r));
-            occupy(occ, env.player.c+1, env.player.r);
-      }
+        }
+
+        if (!ok) continue;
+
+        for (var ry = rr; ry < rr + rh; ry++)
+            for (var rx = rc; rx < rc + rw; rx++)
+                env.map[ry][rx] = env.makeTile('FLOOR');
+
+        rooms.push({
+            c: rc, r: rr, w: rw, h: rh,
+            cx: rc + Math.floor(rw/2),
+            cr: rr + Math.floor(rh/2)
+        });
     }
 
-    var mTypes = Object.keys(MDEFS);
+    // Connect rooms using MST (nearest-neighbor), tunnels keep 1-tile gap from other rooms
+    // Returns true if point (tx,ty) is inside or on the border of a room (excluding rA and rB)
+    function tunnelTooClose(tx, ty, rA, rB) {
+        for (var ri = 0; ri < rooms.length; ri++) {
+            var ro = rooms[ri];
+            if (ro === rA || ro === rB) continue;
+            // 1-tile buffer around room perimeter
+            if (tx >= ro.c - 1 && tx <= ro.c + ro.w &&
+                ty >= ro.r - 1 && ty <= ro.r + ro.h) return true;
+        }
+        return false;
+    }
 
-    // ---- Determine which fairies appear this floor ----
-    // Rules: ruby (index 0) on 1+, azure (index 1) on 2+, gold (index 2) on 4+
-    // Only spawn cage if fairy not yet rescued globally
-    // Max 1 cage per floor
-    var fairyMinFloor = {0: 1, 1: 2, 2: 4}; // index in CDEFS
-    var unrescuedFairies = [];
-    for (var fi = 0; fi < CDEFS.length; fi++) {
-      var fdef = CDEFS[fi];
-      if (!env.globalState.rescuedFairies[fdef.id] && floorNum >= (fairyMinFloor[fi] || 1)) {
-        unrescuedFairies.push(fdef);
-      }
+    function carveCorridor(rA, rB) {
+        var x = rA.cx, y = rA.cr;
+        var tx = rB.cx, ty = rB.cr;
+
+        while (x !== tx) {
+            if (!tunnelTooClose(x, y, rA, rB) || Math.abs(x-tx) <= 2)
+                env.map[y][x] = env.makeTile('FLOOR');
+
+            x += x < tx ? 1 : -1;
+        }
+
+        while (y !== ty) {
+            if (!tunnelTooClose(x, y, rA, rB) || Math.abs(y-ty) <= 2)
+                env.map[y][x] = env.makeTile('FLOOR');
+
+            y += y < ty ? 1 : -1;
+        }
+
+        env.map[ty][tx] = env.makeTile('FLOOR');
+    }
+
+    // Build MST: connect each room to its nearest already-connected room
+    var connected = [rooms[0]];
+    var unconnected = rooms.slice(1);
+    var corridorPairs = [];
+    while (unconnected.length > 0) {
+        var bestDist = Infinity, bestI = 0, bestJ = 0;
+        for (var i = 0; i < unconnected.length; i++) {
+            for (var j = 0; j < connected.length; j++) {
+                var dx = unconnected[i].cx - connected[j].cx;
+                var dy = unconnected[i].cr - connected[j].cr;
+                var d = dx*dx + dy*dy;
+                if (d < bestDist) { bestDist = d; bestI = i; bestJ = j; }
+            }
+        }
+        var rA = connected[bestJ], rB = unconnected[bestI];
+        corridorPairs.push([rA, rB]);
+        carveCorridor(rA, rB);
+        connected.push(rB);
+        unconnected.splice(bestI, 1);
+    }
+    
+    env.entities=[];
+
+    // Place doors along corridor paths
+    for (var pi = 0; pi < corridorPairs.length; pi++) {
+        var A = corridorPairs[pi][0], B = corridorPairs[pi][1];
+        var x = A.cx, y = A.cr;
+        var doorPlaced = false;
+        while (x !== B.cx) {
+            if (!doorPlaced) doorPlaced = placeDoor(x, y, A, B);
+            else break;
+            x += x < B.cx ? 1 : -1;
+        }
+        while (y !== B.cr) {
+            if (!doorPlaced) doorPlaced = placeDoor(x, y, A, B);
+            else break;
+            y += y < B.cr ? 1 : -1;
+        }
+    }
+
+    // Stairs in last room
+    var stairC=-1, stairR=-1;
+    if (rooms.length > 1) {
+        var lr = rooms[rooms.length-1];
+        stairC=lr.cx; stairR=lr.cr;
+        env.setTileStairs(stairC, stairR);
+    }
+    env.torches=[];
+    // Убрать лишние стены (те, что не граничат ни с одним floor/stairs/door)
+    pruneVoidWalls();
+
+    // Dot-стены внутри комнат (до fixAllWalls, чтобы они тоже попали в расчёт)
+    placeDotWalls(rooms);
+
+
+    // Назначить sprite_type каждой стене
+    assignSpriteTypes(rooms);
+
+    // ---- Разместить факелы на стенах комнат ----
+    placeTorches(rooms);
+    
+    // ---- Player setup ----
+     env.particles=[]; env.dmgNums=[]; env.projectiles=[];
+    var sr = rooms[0]||{cx:2,cr:2};
+    // Build occupied map
+    var occ={};
+    
+
+    if (!env.player) {
+        var p = new Player(env);
+        var cell = getFreeCell(occ, rooms[0], rooms[0].cx, rooms[0].cr);
+        env.player = p.make(cell.c, cell.r);
+        if (env.globalState.playerStats) {
+            var s = env.globalState.playerStats;
+            env.player.hp=s.hp; env.player.maxHp=s.maxHp;
+            env.player.atk=s.atk; env.player.def=s.def;
+            env.player.xp=s.xp; env.player.xpNext=s.xpNext;
+            env.player.level=s.level; env.player.gold=s.gold;
+            env.player.weapon=s.weapon; env.player.weapons=s.weapons.slice();
+            env.player.arrows=s.arrows; env.player.stamina=s.stamina;
+            env.player.maxStamina=s.maxStamina; env.player.statPoints=s.statPoints;
+            env.player.mana=s.mana||60; env.player.maxMana=s.maxMana||60;
+            env.player.items=s.items.map(function(x){return{kind:x.kind};});
+            env.player.fairyKeys={};
+            env.globalState.playerStats=null;
+        }
+    } else {
+        var pl=env.player;
+        var cell = getFreeCell(occ, rooms[0], rooms[0].cx, rooms[0].cr);
+        pl.c = cell.c; pl.r = cell.r;
+        pl.x=pl.c*env.TILE+env.TILE/2; pl.y=pl.r*env.TILE+env.TILE/2;
+        pl.hp=Math.min(pl.maxHp, pl.hp+4);
+        pl.fairyKeys={};
+    }
+
+    if (stairC>=0) occupy(occ, stairC, stairR);
+
+    // ---- NPC (floor 1) ----
+    if (floorNum===1 && rooms.length>0) {
+        var cell = getFreeCell(occ, rooms[0], env.player.c+1, env.player.r);
+        env.entities.push(makeNpc('mentor', cell.c, cell.r));
+    }
+
+    // ---- Fairies ----
+    var fairyMinFloor={0:1,1:2,2:4};
+    var unrescuedFairies=[];
+    for (var fi=0;fi<CDEFS.length;fi++) {
+        var fdef=CDEFS[fi];
+        if (!env.globalState.rescuedFairies[fdef.id]&&floorNum>=(fairyMinFloor[fi]||1))
+            unrescuedFairies.push(fdef);
     }
     shuffleArr(unrescuedFairies);
-    // Max 1 cage this floor
-    var activeFairyDef = unrescuedFairies.length > 0 ? [unrescuedFairies[0]] : [];
-    var activeFairyId = activeFairyDef.length > 0 ? activeFairyDef[0].id : null;
+    var activeFairyDef=unrescuedFairies.length>0?[unrescuedFairies[0]]:[];
+    var activeFairyId=activeFairyDef.length>0?activeFairyDef[0].id:null;
 
-    // Rebuild stairs FIRST so occ knows where they are
-    var stairC = -1, stairR = -1;
-    if (rooms.length > 1) {
-      var lr = rooms[rooms.length - 1];
-      // Try center of last room
-      stairC = lr.cx; stairR = lr.cr;
-      if (env.map[stairR]) env.map[stairR][stairC] = 2;
-      occupy(occ, stairC, stairR);
-    }
-
-    // ---- Spawn monsters and items ----
-    for (var i = 1; i < rooms.length; i++) {
-      var room = rooms[i], cnt = randi(1, 3 + (floorNum > 2 ? 2 : 0));
-
-      // Boss in last room
-      if (i === rooms.length - 1) {
-        var bmt = 'boss';
-        if(floorNum<=1) bmt='skeleton'; else if(floorNum<=2) bmt='spider';
-        var bossCell = findFreeCell(occ, room, 20);
-        if (bossCell) {
-          var boss = makeMonster(bmt, bossCell.c, bossCell.r);
-          // Boss guaranteed key drop if fairy active and not yet dropped
-          if (activeFairyId) boss.keyDrop = 'key_' + activeFairyId;
-          env.entities.push(boss);
-          occupy(occ, bossCell.c, bossCell.r);
-        }
-      }
-
-      for (var k = 0; k < cnt; k++) {
-        var cell2 = findFreeCell(occ, room, 15);
-        if (!cell2) continue;
-        var mt = mTypes[0];
-        if(floorNum===1){if(randi(0,100)>80) mt=mTypes[1];}
-        else mt=mTypes[randi(0,Math.min(mTypes.length-2,floorNum))];
-        var mob = makeMonster(mt, cell2.c, cell2.r);
-        // Regular mobs do NOT drop keys
-        env.entities.push(mob);
-        occupy(occ, cell2.c, cell2.r);
-      }
-
+    placeStaticProps(occ, rooms[0]);
     
-      if (Math.random() < 0.5) {
-        var cell3 = findFreeCell(occ, room, 15);
-        if (cell3) {
-          var lr2 = Math.random();
-          if (lr2 < 0.35){} //env.entities.push(makeItem('gold', cell3.c, cell3.r));
-          else if (lr2 < 0.6) {}// env.entities.push(makeItem('potion', cell3.c, cell3.r));
-          else {
-            var ch = makeChest(cell3.c, cell3.r);
-            env.entities.push(ch);
-            occupy(occ, cell3.c, cell3.r);
-          }
+    for (var i = 0; i < rooms.length; i++) {
+        var room = rooms[i];
+        var corners = [
+            {c : room.c, r : room.r, side : 'up_left', ox : -4, oy : -4}, 
+            {c : room.c + room.w - 1, r : room.r, side : 'up_right', ox : 4, oy : -4}, 
+            {c : room.c, r : room.r + room.h-1, side : 'bottom_left', ox : -4, oy : 4}, 
+            {c : room.c + room.w - 1, r : room.r + room.h-1, side : 'bottom_right', ox : 4, oy : 4}
+        ];
+            
+        for (var b = 0; b < 4; b++) {
+            if (randi(1, 100) < 50 && isFree) {
+                var web = makeItem('web_light',corners[b].c, corners[b].r);
+                web.side = corners[b].side;
+                web.flip_h = corners[b].side.indexOf('bottom') !== -1;
+                web.flip_v = corners[b].side.indexOf('left') !== -1;
+                web.ox = corners[b].ox;
+                web.oy = corners[b].oy;
+                web.isPickable = false;
+                env.entities.push(web);
+            }
         }
-      }
-     
-      
-      if (Math.random() < 0.3) {
-        var cell4 = findFreeCell(occ, room, 15);
-        if (cell4) {
-          var ch2 = makeChest(cell4.c, cell4.r);
-          env.entities.push(ch2);
-          occupy(occ, cell4.c, cell4.r);
+        
+    }
+    
+    
+    // ---- Monsters & items ----
+    var mTypes=Object.keys(MDEFS);
+    for (var i=1;i<rooms.length;i++) {
+        var room=rooms[i], cnt=randi(1,3+(floorNum>2?2:0));
+        if (i===rooms.length-1) {
+            var bmt='boss';
+            if(floorNum<=1) bmt='skeleton'; else if(floorNum<=2) bmt='spider';
+            var bossCell=findFreeCell(occ,room,20);
+            if (bossCell) {
+                var boss=makeMonster(bmt,bossCell.c,bossCell.r);
+                if (activeFairyId) boss.keyDrop='key_'+activeFairyId;
+                env.entities.push(boss); occupy(occ,bossCell.c,bossCell.r);
+            }
         }
-      }
-      if (i === 1 && Math.random() < 0.6 && !(env.player.weapons || []).includes('bow')) {
-        var cell5 = findFreeCell(occ, room, 15);
-        if (cell5) env.entities.push(makeItem('bow', cell5.c, cell5.r));
-      }
-      // Staff spawn: room 2+ with 30% chance if not already have it
-      if (i === 2 && Math.random() < 0.5 && !(env.player.weapons || []).includes('staff')) {
-        var cellSt = findFreeCell(occ, room, 15);
-        if (cellSt) env.entities.push(makeItem('staff', cellSt.c, cellSt.r));
-      }
-      //if (Math.random() < 0.4) {
-      //  var cell6 = findFreeCell(occ, room, 15);
-      //  if (cell6) env.entities.push(makeItem('arrows', cell6.c, cell6.r));
-      //}
+        for (var k=0;k<cnt;k++) {
+            var cell2=findFreeCell(occ,room,15); if (!cell2) continue;
+            var mt=mTypes[0];
+            if(floorNum===1){if(randi(0,100)>80)mt=mTypes[1];}
+            else mt=mTypes[randi(0,Math.min(mTypes.length-2,floorNum))];
+            env.entities.push(makeMonster(mt,cell2.c,cell2.r));
+            occupy(occ,cell2.c,cell2.r);
+        }
+        
+        placeStaticProps(occ, room);
+        
+        if (Math.random()<0.4) {
+            var cell3=findFreeCell(occ,room,15);
+            if (cell3) { env.entities.push(makeChest(cell3.c,cell3.r)); occupy(occ,cell3.c,cell3.r); }
+        }
+        if (i===1&&Math.random()<0.6&&!(env.player.weapons||[]).includes('bow')) {
+            var cell5=findFreeCell(occ,room,15);
+            if (cell5) env.entities.push(makeItem('bow',cell5.c,cell5.r));
+        }
+        if (i===2&&Math.random()<0.5&&!(env.player.weapons||[]).includes('staff')) {
+            var cellSt=findFreeCell(occ,room,15);
+            if (cellSt) env.entities.push(makeItem('staff',cellSt.c,cellSt.r));
+        }
     }
 
-    // ---- Spawn fairy cage (max 1 per floor, in last rooms) ----
+    // ---- Fairy cage ----
     if (activeFairyId) {
-      var cageRooms = rooms.slice(Math.max(1, rooms.length - 3));
-      var placed = false;
-      for (var cri = 0; cri < cageRooms.length && !placed; cri++) {
-        var crm = cageRooms[cri];
-        var cc3 = findFreeCell(occ, crm, 20);
-        if (cc3) {
-          env.entities.push(makeCage(activeFairyId, cc3.c, cc3.r));
-          occupy(occ, cc3.c, cc3.r);
-          placed = true;
+        var cageRooms=rooms.slice(Math.max(1,rooms.length-3));
+        var placed2=false;
+        for (var cri=0;cri<cageRooms.length&&!placed2;cri++) {
+            var crm=cageRooms[cri];
+            var cc3=findFreeCell(occ,crm,20);
+            if (cc3) { env.entities.push(makeCage(activeFairyId,cc3.c,cc3.r)); occupy(occ,cc3.c,cc3.r); placed2=true; }
         }
-      }
     }
 
     centerCamera();
-    env.gameOver = false;
-    env.addLog('Этаж ' + floorNum + ' — добро пожаловать!', 'info');
+    env.gameOver=false;
+    env.addLog('Этаж '+floorNum+' — добро пожаловать!','info');
+    env.player.blockingMove(0,0);
+}
 
-    env.player.blockingMove(0, 0);
-  }
 
   // Save player stats for restart (preserving progress)
   function savePlayerStats() {
@@ -565,7 +1175,6 @@ var G = (function(){
   env.dropItemFromMob = function(type, mob) {
     if (!IDEFS[type]||!env.player) return;
     var cells=[];
-    var dirs=[{dc:1,dr:0},{dc:-1,dr:0},{dc:0,dr:1},{dc:0,dr:-1}];
     for(var i=0;i<dirs.length;i++){
       var d={c:mob.c+dirs[i].dc,r:mob.r+dirs[i].dr};
       if(env.player.c===d.c&&env.player.r===d.r) continue;
@@ -583,7 +1192,8 @@ var G = (function(){
     
     return it;
   };
-
+ 
+    
   function tryMelee(dc, dr){
     if(!env.player||env.gameOver||env.modal||dlg.active) return false;
     return env.player.attack(dc, dr);
@@ -601,7 +1211,7 @@ var G = (function(){
     if(!env.player||env.gameOver||env.modal||dlg.active) return false;
     var pl=env.player;
     // todo - check fairys and let choose floor
-    if(env.map[pl.r]&&env.map[pl.r][pl.c]===2) {
+    if(env.map[pl.r]&&env.isStairs(pl.c, pl.r)) {
         env.addLog('▼ Этаж '+(floorNum+1),'info');
         floorNum++;
         generate();
@@ -611,12 +1221,15 @@ var G = (function(){
   }
 
   function tryInteractOrAttack(){
+  
     if(dlg.active){ dlg.onConfirm(); return; }
     if(env.modal==='inventory'){closeModal();return;}
     if(env.modal) return;
     // Ranged aiming: E/Space fires
     if(env.player && env.player.bowAiming){ env.player.rangedShoot(); return; }
+    
     if(tryUseStairs()) return;
+    
     var dc=env.player.lastDc, dr=env.player.lastDr;
     if(dc===0&&dr===0){dc=1;dr=0;}
     // Staff uses F not E; melee for sword
@@ -624,9 +1237,11 @@ var G = (function(){
     
     
     
-    if (tryDialog(env.player.c, env.player.r, true)) return;
+    if (tryDialog(env.player.c + dc, env.player.r + dr, true)) return;
     if (tryOpenProp(env.player.c, env.player.r, dc, dr)) return;
-    
+
+    // Check for destructable items in target cell
+    if (env.player.attackEnv(env.player.c,  env.player.r, dc, dr)) return;
     
     if (env.player.isRangedWeapon && env.player.isRangedWeapon()) {
         env.player.enterAim();
@@ -644,7 +1259,8 @@ var G = (function(){
       if(e.isNpc){
         var near = false;
         if (byDist) {
-          near = mdist(e.c, e.r, nc, nr) === 1;
+          near = mdist(e.c, e.r, nc, nr) === 0;
+          
         } else {
           near = (e.c===nc && e.r===nr) && e.blocking === 1;
         }
@@ -668,15 +1284,19 @@ var G = (function(){
     env.player.usePotion();
     return true;
   }
-
+  
   function tryOpenProp(nc, nr, dc, dr) {
+    nc += dc;
+    nr += dr;
     for(var i=0;i<env.entities.length;i++){
       var e=env.entities[i];
       
-      if ((!e.isChest && !e.isCage) || e.broken) continue;
+      if ((!e.isChest && !e.isCage && !e.isDoor) || e.broken) continue;
       
-      var near = mdist(e.c, e.r, nc, nr) === 1;
-      if (!near) continue;
+      
+      //var near = mdist(e.c, e.r, nc, nr) === 1;
+      //if (!near) continue;
+      if (e.c != nc || e.r != nr) continue; 
       
       var breakProp = false;
       if (e.isChest) {
@@ -687,13 +1307,25 @@ var G = (function(){
             breakProp = true;
           }
           
-      } else {
+      } else if (e.isCage) {
       
         if (!e.freed) {
             e.releaseFairy();
         } else {
             breakProp = true;
         }
+      } else if (e.isDoor) {
+        
+        if (!e.door_open) {
+            e.door_open = true;
+            e.isBlocking = false;
+            console.log(e.door_dir, e.door_side);
+            env.addLog('Дверь открыта', 'info');
+            
+            return true;
+        }
+        
+        continue;
       }
       
       if (breakProp) {
@@ -725,14 +1357,15 @@ var G = (function(){
     if (tryDialog(nc, nr, false)) return;
 
     pl.c=nc; pl.r=nr; pl.moveHop=1;
-
+    if (pl.isStuck) pl.isStuck = false; // moved out of stuck position
+    
     for(var i=env.entities.length-1; i>=0; i--){
       var e = env.entities[i];
       if(e.isItem && e.c===nc && e.r===nr) {
-        e.pickup();
-        env.entities.splice(i, 1);
+        if (e.pickup()) env.entities.splice(i, 1);
       }
     }
+  
 
   }
 
@@ -753,21 +1386,11 @@ var G = (function(){
     chest.opened=true;
     env.spawnFairyFX(chest.x,chest.y,'#d4a830');
     var r=Math.random();
-    // Chests can drop keys (boss drops handled separately)
-   
+    
     if(r<0.35){env.dropItemFromMob('arrows',chest);}
     else if(r<0.78){env.dropItemFromMob('potion',chest);}
     else if(r<0.78){env.dropItemFromMob('gold',chest).valLocal = randi(1,4); }
-    else {
-      // Try to drop a key for an unrescued fairy
-      var needKeys = CDEFS.filter(function(d){ return !env.globalState.rescuedFairies[d.id] && !env.player.fairyKeys[d.id]; });
-      if(needKeys.length > 0){
-        var lk = needKeys[randi(0, needKeys.length-1)];
-        env.dropItemFromMob('key_' + lk.id, chest);
-      } else {
-        env.dropItemFromMob('gold', chest).valLocal = randi(1,4);
-      }
-    }
+    else env.dropItemFromMob('potion',chest);
   }
 
   // ---- Modal helpers ----
@@ -891,10 +1514,13 @@ var G = (function(){
     for(var i=env.fairies.length-1;i>=0;i--){
       if(!env.fairies[i].update(dt)) env.fairies.splice(i,1);
     }
+    // Update torches
+    for(var i=0;i<env.torches.length;i++) env.torches[i].update(dt);
     for(var i=env.annotations.length-1;i>=0;i--){
       env.annotations[i].life-=dt;
       if(env.annotations[i].life<=0) env.annotations.splice(i,1);
     }
+    
   }
 
   // ---- Render ----
@@ -914,16 +1540,29 @@ var G = (function(){
     }
 
     ctx.save();
-    ctx.translate(W/2,H/2);ctx.scale(env.cfg.zoom,env.cfg.zoom);ctx.translate(-env.camera.x,-env.camera.y);
+    ctx.translate(W/2,H/2);
+    ctx.scale(env.cfg.zoom,env.cfg.zoom);
+    ctx.translate(-env.camera.x,-env.camera.y);
 
-    drawMap();
+    env.sc=Math.max(0,Math.floor((env.camera.x-canvas.width/env.cfg.zoom/2)/env.TILE)-1);
+    env.sr=Math.max(0,Math.floor((env.camera.y-canvas.height/env.cfg.zoom/2)/env.TILE)-1);
+    env.ec=Math.min(env.cfg.mapW, sc+Math.ceil(canvas.width/env.cfg.zoom/env.TILE)+3);
+    env.er=Math.min(env.cfg.mapH, sr+Math.ceil(canvas.height/env.cfg.zoom/env.TILE)+3);
+    
+    drawMap(["FLOOR", "DOOR", 'STAIRS']);
+    
     drawAttackDir();
     drawShadows();
+
+    drawMapWall();
     drawChests();
     drawCages();
     drawItems();
+    
+    drawMapWall(true);
     drawNpcs();
 
+    for(var i=0;i<env.torches.length;i++) env.torches[i].draw(ctx);
     var ac = env.PLAYER_TPL.animController;
     var isAttacking = ac && ac.getAnim && ac.getAnim() === 'attack';
 
@@ -935,14 +1574,17 @@ var G = (function(){
       drawMonsters();
     }
 
+    for(var i=0;i<env.torches.length;i++) env.torches[i].draw(ctx, true);
+    
     for(var i=0;i<env.fairies.length;i++) env.fairies[i].draw(ctx);
     for(var i=0;i<env.particles.length;i++) env.particles[i].draw(ctx);
     for(var i=0;i<env.dmgNums.length;i++) env.dmgNums[i].draw(ctx);
     for(var i=0;i<env.projectiles.length;i++) env.projectiles[i].draw(ctx);
     if (freeCameraMode) env.camera.drawPosCell(ctx);
 
-    if(env.map[env.player.r]&&env.map[env.player.r][env.player.c]===2) {
-        env.drawInteractHint(env.player.c, env.player.r, env.player.x, env.player.y + env.TILE/2 + 16, '[E / Space] - Спустится', {checkD : 0, fontSize : 7});
+    if(env.isStairs(env.player.c, env.player.r)) {
+        env.drawInteractHint(env.player.c, env.player.r,
+            env.player.x, env.player.y + env.TILE/2 + 16, '[E / Space] - Спустится', {checkD : 0, fontSize : 7, fromC : env.player.c, fromR : env.player.r});
     }
     
     ctx.restore();
@@ -960,38 +1602,128 @@ var G = (function(){
     }
   }
 
-  // ---- Map drawing ----
-  function drawMap(){
-    var sc=Math.max(0,Math.floor((env.camera.x-canvas.width/env.cfg.zoom/2)/env.TILE)-1);
-    var sr=Math.max(0,Math.floor((env.camera.y-canvas.height/env.cfg.zoom/2)/env.TILE)-1);
-    var ec=Math.min(env.cfg.mapW,sc+Math.ceil(canvas.width/env.cfg.zoom/env.TILE)+3);
-    var er=Math.min(env.cfg.mapH,sr+Math.ceil(canvas.height/env.cfg.zoom/env.TILE)+3);
-    for(var r=sr;r<er;r++){
-      for(var c=sc;c<ec;c++){
-        var x=c*env.TILE,y=r*env.TILE,tile=env.map[r]&&env.map[r][c];
-        if(tile===1){
-          ctx.fillStyle='#2b3235';ctx.fillRect(x,y,env.TILE,env.TILE);
-          ctx.fillStyle='#444f54';ctx.fillRect(x,y,env.TILE,3);ctx.fillRect(x,y,3,env.TILE);
-          ctx.fillStyle='rgba(0,0,0,0.25)';ctx.fillRect(x+env.TILE-2,y,2,env.TILE);ctx.fillRect(x,y+env.TILE-2,env.TILE,2);
-          
-        } else if(tile===0 ||tile===3){
-        
-          ctx.fillStyle=(r+c)%2===0?'#384144':'#525d60';ctx.fillRect(x,y,env.TILE,env.TILE);
-          ctx.fillStyle='rgba(0,0,0,0.1)';ctx.fillRect(x,y,env.TILE,1);ctx.fillRect(x,y,1,env.TILE);
-          
-          if(tile===3) drawSpr(ctx,'tombstone',x+env.TILE/2,y+env.TILE/2,0);
-          
-        } else if(tile===2){
-          ctx.fillStyle='#161a0e';ctx.fillRect(x,y,env.TILE,env.TILE);
-          var g=ctx.createRadialGradient(x+env.TILE/2,y+env.TILE/2,3,x+env.TILE/2,y+env.TILE/2,env.TILE*0.65);
-          g.addColorStop(0,'rgba(180,164,70,0.22)');g.addColorStop(1,'transparent');
-          ctx.fillStyle=g;ctx.fillRect(x,y,env.TILE,env.TILE);
-          ctx.fillStyle='#a89848';ctx.font='bold 16px Courier New';
-          ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('▼',x+env.TILE/2,y+env.TILE/2);
-        }
+
+env.drawSprTransform = function(ctx, key, x, y, flipH, flipV, rotate90, sz) {
+    var s = SPRITES[key];
+    if (!s || !s.img) return;
+    ctx.save();
+    ctx.translate(x, y);
+    if (rotate90) ctx.rotate(Math.PI / 2);
+    if (flipH) ctx.scale(-1, 1);
+    if (flipV) ctx.scale(1, -1);
+    
+    if (sz === 1) {
+        var sz1 = env.TILE * s.scale;
+        ctx.drawImage(s.img, - sz1/2 + s.ox, - sz1/2 + s.oy, sz1, sz1);
+      } else {
+        var sz1 = s.img.naturalWidth * s.scale;
+        var sz2 = s.img.naturalHeight * s.scale;
+        ctx.drawImage(s.img, - sz1/2 + s.ox, - sz2/2 + s.oy, sz1, sz2);
       }
+      
+    ctx.restore();
+}
+
+// Рисует стену по sprite_type, поддерживает зеркалирование для недостающих углов
+function drawWallSprite(ctx, tile, px, py) {
+    var T = env.TILE;
+    var cx = px + T/2, cy = py + T/2;
+    var st = tile.sprite_type;
+
+    // Маппинг sprite_type  [ключ спрайта, flipH, flipV, rotate90]
+    var MAP = {
+        'wall_h_up_a':      ['wall_h_up_a',      false, false, false],
+        'wall_h_up_b':      ['wall_h_up_b',       false, false, false],
+        'wall_h_up_c':      ['wall_h_up_c',      false, false, false],
+        'wall_h_up_d':      ['wall_h_up_d',       false, false, false],
+        'wall_h_up_e':      ['wall_h_up_e',       false, false, false],
+        'wall_h_bottom_a':  ['wall_h_bottom_a',   false, false, false],
+        'wall_h_bottom_b':  ['wall_h_bottom_b',   false, false, false],
+        'wall_v_a':         ['wall_v_a',           false, false, false],
+        'wall_v_b':         ['wall_v_b',           false, false, false],
+        'wall_dot':         ['wall_dot',           false, false, false],
+        
+        
+        
+        'wall_up_corner_b':  ['wall_up_corner_b',           false, false, false],
+        
+        'wall_up_corner_b_right':  ['wall_up_corner_b',           true, false, false],
+        
+        'wall_down_corner_a':  ['wall_down_corner_a',           false, false, false],
+        
+        'wall_down_corner_c':  ['wall_down_corner_c',           false, false, true],
+        
+        'wall_down_corner_a_right':  ['wall_down_corner_a',           true, false, false],
+        // Верхние углы
+        'wall_up_corner_a': ['wall_up_corner_a',  false, false, false],  // верх-право        
+        'wall_up_corner_a_left': ['wall_up_corner_a',  true, false, false],  // верх-право
+        // Нижние углы — зеркалятся из верхних если нет своего спрайта
+        'wall_down_corner_b': ['wall_down_corner_b', false, false, false], // низ-право
+        'wall_down_corner_b_left': ['wall_down_corner_b', true, false, false], // низ-право
+        'wall_v_a_left': ['wall_v_a', true, false, false], // низ-право
+        'wall_v_b_left': ['wall_v_b', true, false, false], // низ-право
+    };
+
+    var entry = MAP[st];
+    if (!entry) {
+        // Fallback: рисуем wall_h_up_a
+        entry = ['wall_dot', false, false, false];
     }
-  }
+
+    var sprKey = entry[0];
+    var spr = SPRITES[sprKey];
+
+    if (spr && spr.img) {
+        drawSprTransform(ctx, sprKey, cx, cy, entry[1], entry[2], entry[3]);
+    } else {
+        console.log('unmapped' + st);
+    }
+}
+
+
+function drawMapWall(corners_bottom) {
+    
+    for (var r=env.sr; r<env.er; r++) {
+        for (var c=env.sc; c<env.ec; c++) {
+            var tile = env.map[r] && env.map[r][c];
+            if (!tile) continue; // VOID — пустота, просто фон
+
+            if (tile.type === 'WALL') {
+                if (corners_bottom && tile.sprite_type.indexOf('down_corner') == -1) {
+                    continue;
+                }
+                drawWallSprite(ctx, tile, c * env.TILE, r * env.TILE);
+            }
+        }
+    }
+}
+
+function drawMap(type) {
+    
+    
+    for (var r=env.sr; r<env.er; r++) {
+        for (var c=env.sc; c<env.ec; c++) {
+            var tile = env.map[r] && env.map[r][c];
+            if (!tile) continue; // VOID — пустота, просто фон
+
+            if (type && type.indexOf(tile.type) === -1) continue;
+            ctx.globalAlpha = 1;
+            var x = c * env.TILE, y = r * env.TILE;
+            if (tile.type === 'FLOOR' || tile.type === 'DOOR') {
+            
+                drawSprTransform(ctx, tile.sprite_type, x + (env.TILE / 2),y+ (env.TILE / 2), tile.sprite_flip_h,  tile.sprite_flip_v, 0, 1);
+                
+            } else if (tile.type === 'STAIRS') {
+                
+                drawSpr(ctx, 'next_floor',x + (env.TILE / 2),y+ (env.TILE / 2), 1);
+
+            } 
+
+            ctx.globalAlpha = 1;
+        }
+    }
+}
+
 
   function drawAttackDir(){
     if(!env.player||env.player.hp<=0) return;
@@ -1050,7 +1782,9 @@ var G = (function(){
 
   function drawChests(){
     for(var i=0;i<env.entities.length;i++){
-      var e=env.entities[i];if(!e.isChest) continue;
+      var e=env.entities[i];
+      
+      if(!e.isChest) continue;
       
       if(e.broken) continue; // don't draw broken chests
       
@@ -1059,7 +1793,7 @@ var G = (function(){
       ctx.save();ctx.translate(px,py);
       drawSpr(ctx,e.opened?'chest_opened':'chest_clothed',0,0,sz);
       ctx.restore();
-      env.drawInteractHint(e.c, e.r, px, py - half - 16);
+      if (!e.opened) env.drawInteractHint(e.c, e.r, px, py - half - 16);
     }
   }
 

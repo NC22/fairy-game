@@ -145,6 +145,16 @@ function Projectile(env) {
     if (h.type != 'slime') {
     for (var j = 0; j < env.entities.length; j++) {
       var e = env.entities[j];
+
+      // Destructable item hit
+      //if (e.isItem && e.isDestructable && !e.picked) {
+      //    var ec = Math.floor(e.x / env.TILE), er = Math.floor(e.y / env.TILE);
+      //    if (Math.abs(h.x - e.x) < env.TILE * 0.5 && Math.abs(h.y - e.y) < env.TILE * 0.5) {
+      //        e.takeHit(h.atk, h.angle);
+      //        return false;
+      //    }
+      //}
+
       if (!e.isMonster || e.dead) continue;
       var ex = e.c * env.TILE + env.TILE/2, ey = e.r * env.TILE + env.TILE/2;
       if (Math.abs(h.x - ex) < env.TILE * 0.5 && Math.abs(h.y - ey) < env.TILE * 0.5) {

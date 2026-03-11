@@ -204,13 +204,14 @@ function Player(env) {
 
         // Health bar
         var bx = px - sz/2, by = py - half - 8 - 36, bw = sz, bh = 3;
+        /*
         ctx.fillStyle = '#111'; ctx.fillRect(bx, by, bw, bh);
         var pp = h.hp / h.maxHp;
         ctx.fillStyle = pp > 0.5 ? '#3a8a3a' : pp > 0.25 ? '#8a6a18' : '#8a1818';
         ctx.fillRect(bx, by, bw * pp, bh);
         ctx.strokeStyle = 'rgba(255,255,180,0.15)'; ctx.lineWidth = 0.5;
         ctx.strokeRect(bx, by, bw, bh);
-
+        */
         if (h.stamina < h.maxStamina || h.staminaRegenDelay > 0) {
             var sp = h.stamina / h.maxStamina;
             by += 5;
@@ -278,7 +279,26 @@ function Player(env) {
         ctx.setLineDash([]);
         ctx.restore();
     }
-
+    
+    h.attackEnv = function(c, r, dc, dr) {
+        var nc = c + dc;
+        var nr = r + dr;
+        for (var di = 0; di < env.entities.length; di++) {
+            var de = env.entities[di];
+            if (de.isItem && de.isDestructable && !de.picked && de.c === nc && de.r === nr) {
+                if (!h.canMeleeAttack()) return true;
+                h.spendStamina(10);
+                var hitAngle = Math.atan2(dr, dc);
+                de.takeHit(h.atk, hitAngle);
+                if (env.PLAYER_TPL.animController) env.PLAYER_TPL.animController.playOnce('attack','idle');
+                h.startSwing(dc, dr);
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
     // Draw weapon swing sprite overlay
     function drawWeaponSwing(ctx) {
         var parts = env.PLAYER_TPL.animController ? env.PLAYER_TPL.animController.getImages() : {};
@@ -350,6 +370,7 @@ function Player(env) {
     // Attack by direction dc, dr (melee)
     h.attack = function(dc, dr) {
         var nc = h.c + dc, nr = h.r + dr;
+        
         for (var i = 0; i < env.entities.length; i++) {
             var e = env.entities[i];
             if (!e.isMonster || e.dead) continue;
@@ -442,7 +463,6 @@ function Player(env) {
             var a = angle + rand(-0.4, 0.4);
             env.spawnParticle(fx, fy, Math.cos(a)*rand(30,80), Math.sin(a)*rand(30,80), 0.35, '#88aaff', rand(3,6));
         }
-        env.addLog('✦ Магический заряд!', 'info');
         if (env.PLAYER_TPL.animController) env.PLAYER_TPL.animController.playOnce('attack','idle');
         h.startSwing(dc, dr);
         return true;
@@ -556,7 +576,11 @@ function Player(env) {
         env.modal = 'gameover';
         env.modalTimer = 3;
         env.canvasButtons = [];
-        if (env.map[h.r]) env.map[h.r][h.c] = 3;
+        
+        var m = new ItemEntity(env);
+        m.make('tombstone', h.c, h.r);
+        env.entities.push(m);
+        
         h.hp = 0;
         env.spawnFairyFX(h.x, h.y, '#996633');
     };

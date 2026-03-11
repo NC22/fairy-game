@@ -172,17 +172,31 @@ function GameUI(env, ctx, canvas) {
     var pl = env.player;
 
     uiBox(bx, by, bw, bh, '#888');
-    drawHeader('Инвентарь', bx, by, bw);
+    
+    var btmX = bx + 16;
+        btmY = by + bh - 24;
+     env.drawSpr(ctx, 'gold', btmX, btmY, 0);
+     btmX += 16;
+     ctx.fillStyle = '#fff'; ctx.font = '12px ' + font + '';
+     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+     ctx.fillText(pl.gold, btmX, btmY); 
+     btmX += 32;
+     env.drawSpr(ctx, 'arrows', btmX, btmY, 0);
+     btmX += 32;
+     ctx.fillText(pl.arrows, btmX, btmY); 
+     
+     ctx.fillText('Этаж : ' + floorNum, bx + bw - 68 , btmY); 
+     
+     
+    //drawHeader('Инвентарь', bx, by, bw);
 
-    var cx = bx + 12, cy = by + 30, lh = 17;
+    var cx = bx + 12, cy = by + 12, lh = 17;
 
     var stats = [
-      ['Уровень', pl.level, '#ffdd44'], ['HP', pl.hp + '/' + pl.maxHp, '#ff6666'],
-      ['Атака', pl.atk, '#ffaa44'], ['Защита', pl.def, '#88aaff'],
-      ['XP', pl.xp + '/' + pl.xpNext, '#88ff88'], ['Золото', pl.gold, '#ffcc44'],
-      ['Стрелы', pl.arrows, '#d4a830'], ['Стамина', Math.floor(pl.stamina) + '/' + pl.maxStamina, '#e4cf55'],
-      ['Мана', Math.floor(pl.mana||0) + '/' + (pl.maxMana||60), '#66aaff'], ['Очки', pl.statPoints || 0, '#e8d060'],
-      ['Этаж', floorNum, '#888'],
+      ['LVL', pl.level, '#fff'], ['HP', pl.hp + '/' + pl.maxHp, '#fff'],
+      ['ATK', pl.atk, '#fff'], ['DEF', pl.def, '#fff'],
+      ['XP', pl.xp + '/' + pl.xpNext, '#fff'], ['STM', Math.floor(pl.stamina) + '/' + pl.maxStamina, '#fff'],
+      ['SP', Math.floor(pl.mana||0) + '/' + (pl.maxMana||60), '#66aaff'],
     ];
     var col2 = bx + bw/2;
     for (var i = 0; i < stats.length; i++) {
@@ -226,8 +240,7 @@ function GameUI(env, ctx, canvas) {
       if (!pl.weapons.includes(w)) return;
       var selW = pl.weapon === w;
       var wnames = {sword:'Меч', bow:'Лук', staff:'Посох'};
-      var extra = w === 'bow' ? ' (' + pl.arrows + ' стрел)' : '';
-      uiBtn(cx, actionY, bw - 24, 22, wnames[w] + extra,
+      uiBtn(cx, actionY, bw - 24, 22, wnames[w],
         (function(ww){ return function(){
           env.player.equipWeapon(w);
         }; })(w),
@@ -310,6 +323,34 @@ function GameUI(env, ctx, canvas) {
   ui.drawHUD = function(floorNum) {
     if (!env.player) return;
     var pl = env.player, W = canvas.width, H = canvas.height;
+    
+
+    var sx = 20;
+    ctx.fillStyle = '#1a1a1a'; ctx.fillRect(sx, 7, 60, 10);
+    var pct = pl.hp / pl.maxHp;
+    ctx.fillStyle = pct > 0.5 ? '#3a9a3a' : pct > 0.25 ? '#9a7a20' : '#9a2020';
+    ctx.fillRect(sx, 7, 60 * pct, 10);
+    ctx.strokeStyle = '#444'; ctx.lineWidth = 0.5; ctx.strokeRect(sx, 7, 60, 10);
+    ctx.fillStyle = '#aaa'; ctx.font = '8px ' + font + '';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(pl.hp + '/' + pl.maxHp, sx + 30, 12);
+    
+    // Fairy companions HUD icons
+    var rescued = (env.globalState && env.globalState.rescuedFairies) ? env.globalState.rescuedFairies : {};
+    var fy2 = 6;// 36;
+    if (CDEFS) {
+      CDEFS.forEach(function(def) {
+        var done = rescued[def.id];
+        ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(W - 160, fy2, 160, 14);
+        ctx.fillStyle = done ? '#44cc88' : '#888';
+        ctx.font = '14px ' + font + ''; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+        ctx.fillText((done ? '✓ ' : ' x '), W - 140, fy2 + 7);
+        ctx.fillText(def.label, W - 4, fy2 + 7);
+        fy2 += 16;
+      });
+    }
+    
+    /*
     ctx.fillStyle = 'rgba(0,0,0,0.72)'; ctx.fillRect(0, 0, W, 28);
     ctx.strokeStyle = '#2a2a18'; ctx.lineWidth = 1; ctx.strokeRect(0, 27.5, W, 0);
 
@@ -348,20 +389,7 @@ function GameUI(env, ctx, canvas) {
     ctx.fillStyle = '#333'; ctx.font = '8px ' + font + '';
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText('Этаж ' + floorNum, W - 160, 14);
-
-    // Fairy companions HUD icons
-    var rescued = (env.globalState && env.globalState.rescuedFairies) ? env.globalState.rescuedFairies : {};
-    var fy2 = 36;
-    if (CDEFS) {
-      CDEFS.forEach(function(def) {
-        var done = rescued[def.id];
-        ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(W - 160, fy2, 160, 14);
-        ctx.fillStyle = done ? '#44cc88' : '#888';
-        ctx.font = '14px ' + font + ''; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-        ctx.fillText((done ? '✓ ' : ' x '), W - 140, fy2 + 7);
-        ctx.fillText(def.label, W - 4, fy2 + 7);
-        fy2 += 16;
-      });
-    } 
+ 
+    */
   };
 }

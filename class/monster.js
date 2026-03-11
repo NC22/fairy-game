@@ -33,7 +33,7 @@ function Monster(env) {
         h.ai     = def.ai;
         h.facing = 1;
         h.hopTimer  = 0;
-        h.hopSpeed  = randi(7, 12) * def.speed;
+        h.hopSpeed  = 6 * def.speed; // randi(7, 12) * def.speed;
         h.hitFlash  = 0;
         h.nudge = { x: 0, y: 0, t: 0 };
         h.path      = [];
@@ -274,16 +274,15 @@ function Monster(env) {
     function _moveRandom() {
         
         var d = {c : 0, r : 0};
+        refreshPath();
         
-        if (h.aggro) {
-            if (h.pathTimer <= 0) {
-                h.path = env.pathfinder.find(h.c, h.r, player.c, player.r);
-                h.pathTimer = 1.0;
-            }
+        if (h.aggro && h.path.length > 0) {
+         
             if (h.path.length > 0) {
                 d.c = h.path[0].c - h.c;
                 d.r = h.path[0].r - h.r;
             }
+            
         } else {
             var dd2 = [{ c: 1, r: 0 }, { c: -1, r: 0 }, { c: 0, r: 1 }, { c: 0, r: -1 }];
             var ddd = dd2[randi(0, 3)];
@@ -420,22 +419,33 @@ function Monster(env) {
     
     function validateMove(d) {
          var nc7 = h.c + d.c, nr7 = h.r + d.r;
+         var moved = false;
         if (!env.isWall(nc7, nr7) && !(nc7 === env.player.c && nr7 === env.player.r)) {
             var bl5 = false;
             for (var i = 0; i < env.entities.length; i++) {
                 var e = env.entities[i];
                 if (e.isMonster && !e.dead && e !== h && e.c === nc7 && e.r === nr7) { bl5 = true; break; }
             }
-            if (!bl5) { h.c = nc7; h.r = nr7; }
+            if (!bl5) { moved = true; h.c = nc7; h.r = nr7; }
         }
-
+        
+        return moved;
     }
+    
+    function refreshPath() {
+        if (h.pathTimer <= 0) {
+            h.path = env.pathfinder.find(h.c, h.r, env.player.c, env.player.r);
+            h.pathTimer = h.ai === 'boss' ? 0.7 : 1.2;
+        }  
+        
+    }
+    
     h.update = function(dt) {
         if (h.dead || !env.player) return;
 
         var player = env.player;
         var pd = mdist(h.c, h.r, player.c, player.r);
-
+        
         h.pathTimer  -= dt;
         h.stateTimer -= dt;
         h.hopTimer   += dt * h.hopSpeed;
@@ -463,32 +473,31 @@ function Monster(env) {
 
         // Ближняя атака (общий метод)
         if (h.tryMeleeAttack(player)) return;
-
+        
+    
         if (h.stateTimer <= 0) {
+            
+            if (h.aggro) refreshPath();
+            
             h.stateTimer = 0.5 / h.speed;
             var d = {c : 0, r : 0};
-
-            if ((h.ai === 'chase' || h.ai === 'boss') && h.aggro) {
-                if (h.pathTimer <= 0) {
-                    h.path = env.pathfinder.find(h.c, h.r, player.c, player.r);
-                    h.pathTimer = h.ai === 'boss' ? 0.7 : 1.2;
-                }
-                if (h.path.length > 0) {
-                    d.c = h.path[0].c - h.c;
-                    d.r = h.path[0].r - h.r;
-                }
-
-            } else if (h.ai === 'patrol') {
-                if (h.aggro) {
-                    if (h.pathTimer <= 0) {
-                        h.path = env.pathfinder.find(h.c, h.r, player.c, player.r);
-                        h.pathTimer = 1.5;
-                    }
-                    if (h.path.length > 0) {
-                        d.c = h.path[0].c - h.c;
-                        d.r = h.path[0].r - h.r;
-                    }
-                } else {
+            if (h.path.length > 0) {
+             
+                d.c = h.path[0].c - h.c;
+                d.r = h.path[0].r - h.r;
+                
+                if (Math.abs(d.c) > 1 || Math.abs(d.r) > 1) {
+                    d.c = 0;
+                    d.r = 0;
+                    h.pathTimer = 0;
+                    refreshPath();
+                } 
+            }
+            
+            // if ((h.ai === 'chase' || h.ai === 'boss') && h.aggro) {
+             
+            if (h.ai === 'patrol') {
+                if (!h.aggro) {
                     d.c = h.patrolDir.c;
                     d.r = h.patrolDir.r;
                     if (env.isWall(h.c + d.c, h.r + d.r) || Math.random() < 0.2) {
@@ -502,13 +511,12 @@ function Monster(env) {
                 d = _moveRandom();
             }
 
-            if (d.c !== 0 && d.r !== 0) {
+            if (h.path.length < 0 && d.c !== 0 && d.r !== 0) {
                 if (Math.random() < 0.5) d.c = 0; else d.r = 0;
             }
             
             updateFacing(d);
-            validateMove(d);
-            if (h.path.length > 0) h.path.shift();
+            if (validateMove(d) && h.path.length > 0) h.path.shift();
         }
 
         var tx3 = h.c * env.TILE + env.TILE / 2 + h.nudge.x;
